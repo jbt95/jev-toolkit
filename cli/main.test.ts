@@ -9,7 +9,7 @@ import { makeTestTransport, tempEventsPath } from "../tests/helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",
-  answers: { is_dupe: { _tag: "noul", noul: 0.99 } },
+  answers: { is_dupe: { type: "noul", noul: 0.99 } },
   usage: { input_tokens: 100, output_tokens: 10 },
 });
 

@@ -17,7 +17,7 @@ import { makeTestTransport, tempEventsPath } from "../tests/helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",
-  answers: { is_dupe: { _tag: "noul", noul: 0.99 } },
+  answers: { is_dupe: { type: "noul", noul: 0.99 } },
   usage: { input_tokens: 100, output_tokens: 10 },
 });
 
@@ -32,14 +32,20 @@ const sampleInput: AskInput = {
 describe("JevClient", () => {
   it("decodes a successful response and logs an ok call event", async () => {
     const log = makeEventLog(await tempEventsPath());
+    let sentBody = "";
     const client = makeJevClient({
       apiKey: Option.some("test-key"),
-      transport: makeTestTransport(() => Effect.succeed(cannedSuccess)),
+      transport: makeTestTransport((body) => {
+        sentBody = body;
+        return Effect.succeed(cannedSuccess);
+      }),
       log,
     });
 
     const result = await Effect.runPromise(client.ask(sampleInput));
 
+    expect(sentBody).toContain('"type":"noul"');
+    expect(sentBody).not.toContain('"_tag"');
     expect(result.model).toBe("jev-1.13.0");
     expect(result.answers["is_dupe"]?._tag).toBe("noul");
     expect(result.usage).toEqual({ input: 100, output: 10 });

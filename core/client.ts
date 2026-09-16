@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { EventLog, type EventLogService } from "./events.ts";
-import { AnswerMap, type CallEvent, type Harness, type QuestionMap } from "./schema.ts";
+import type { Answer, AnswerMap, CallEvent, Harness, Question, QuestionMap } from "./schema.ts";
 
 export const DEFAULT_MODEL = "jev-latest";
 const TIMEOUT = "120 seconds";
@@ -69,9 +69,66 @@ export function createFetchTransport(endpoint: string, apiKey: string): JevTrans
   };
 }
 
+// The TypeSafe wire format tags questions/answers with `type`; the internal
+// dialect uses Effect Schema `_tag`. Convert at this boundary only.
+type ApiCriteria = ReadonlyArray<string> | Readonly<Record<string, string>>;
+
+interface ApiQuestion {
+  type: "choice" | "noul" | "score";
+  instructions: string;
+  criteria?: ApiCriteria;
+}
+
+const toApiQuestion = (question: Question): ApiQuestion => {
+  const converted: ApiQuestion = { type: question._tag, instructions: question.instructions };
+  if (question.criteria !== undefined) converted.criteria = question.criteria;
+  return converted;
+};
+
+const ApiNoulAnswer = Schema.Struct({ type: Schema.Literal("noul"), noul: Schema.Number });
+const ApiChoiceAnswer = Schema.Struct({
+  type: Schema.Literal("choice"),
+  choice: Schema.String,
+  confidence: Schema.Number,
+  probabilities: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+});
+const ApiScoreAnswer = Schema.Struct({
+  type: Schema.Literal("score"),
+  score: Schema.Number,
+  confidence: Schema.Number,
+  probabilities: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+});
+const ApiAnswer = Schema.Union([ApiNoulAnswer, ApiChoiceAnswer, ApiScoreAnswer]);
+type ApiAnswer = Schema.Schema.Type<typeof ApiAnswer>;
+
+const toAnswer = (answer: ApiAnswer): Answer => {
+  switch (answer.type) {
+    case "noul":
+      return { _tag: "noul", noul: answer.noul };
+    case "choice":
+      return {
+        _tag: "choice",
+        choice: answer.choice,
+        confidence: answer.confidence,
+        probabilities: answer.probabilities ?? {},
+      };
+    case "score": {
+      if (answer.probabilities === undefined) {
+        return { _tag: "score", score: answer.score, confidence: answer.confidence };
+      }
+      return {
+        _tag: "score",
+        score: answer.score,
+        confidence: answer.confidence,
+        probabilities: answer.probabilities,
+      };
+    }
+  }
+};
+
 const JevResponse = Schema.Struct({
   model: Schema.String,
-  answers: AnswerMap,
+  answers: Schema.Record(Schema.String, ApiAnswer),
   usage: Schema.Struct({ input_tokens: Schema.Number, output_tokens: Schema.Number }),
 });
 const decodeResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(JevResponse));
@@ -158,7 +215,13 @@ export function makeJevClient(
         return yield* Effect.fail(new JevConfigError());
       }
 
-      const body = JSON.stringify({ state: input.state, questions: input.questions, model });
+      const body = JSON.stringify({
+        state: input.state,
+        questions: Object.fromEntries(
+          Object.entries(input.questions).map(([id, question]) => [id, toApiQuestion(question)]),
+        ),
+        model,
+      });
       const outcome = yield* Effect.result(transport.send(body));
       const latencyMs = (yield* Clock.currentTimeMillis) - started;
 
@@ -183,9 +246,12 @@ export function makeJevClient(
         return yield* Effect.fail(new JevDecodeError());
       }
 
+      const answers: AnswerMap = Object.fromEntries(
+        Object.entries(decoded.success.answers).map(([id, answer]) => [id, toAnswer(answer)]),
+      );
       const result: AskResult = {
         model: decoded.success.model,
-        answers: decoded.success.answers,
+        answers,
         usage: {
           input: decoded.success.usage.input_tokens,
           output: decoded.success.usage.output_tokens,
