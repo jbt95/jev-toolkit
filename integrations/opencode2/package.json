@@ -2,7 +2,7 @@
   "name": "jev-opencode2",
   "version": "0.1.0",
   "private": true,
-  "description": "Experimental OpenCode V2 plugin: typesafe_ask tool plus deterministic Jev triggers. Dependencies install once at the repo root so one effect instance is shared with core/.",
+  "description": "OpenCode V2 trigger shim (hooks only): Jev prompt directive plus context policy. The typesafe_ask tool is served by `jev mcp`; dependencies install once at the repo root.",
   "type": "module",
   "devDependencies": {
     "@opencode/plugin": "2.0.2"
