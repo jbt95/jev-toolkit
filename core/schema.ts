@@ -14,7 +14,7 @@ export const ChoiceQuestion = Schema.TaggedStruct("choice", {
 });
 export const NoulQuestion = Schema.TaggedStruct("noul", {
   instructions: Schema.NonEmptyString,
-  criteria: Schema.optional(Criteria),
+  criteria: Schema.optional(Schema.NullOr(Criteria)),
 });
 export const ScoreQuestion = Schema.TaggedStruct("score", {
   instructions: Schema.NonEmptyString,

@@ -68,6 +68,22 @@ describe("jev CLI", () => {
     expect(output).toContain("p(yes)=0.99");
   });
 
+  it("tolerates a null model in the ask payload", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const input = JSON.stringify({
+      state: "text",
+      questions: { is_dupe: { _tag: "noul", instructions: "Duplicate charge?" } },
+      model: null,
+    });
+
+    const code = await Effect.runPromise(
+      runCli(["ask"], layersFor(await tempEventsPath()), () => Effect.succeed(input)),
+    );
+
+    expect(code).toBe(0);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain("p(yes)=0.99");
+  });
+
   it("fails with exit code 1 on an invalid ask payload", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 

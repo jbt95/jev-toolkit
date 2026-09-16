@@ -1,0 +1,10 @@
+{
+  "name": "jev-opencode2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental OpenCode V2 plugin: typesafe_ask tool plus deterministic Jev triggers. Dependencies install once at the repo root so one effect instance is shared with core/.",
+  "type": "module",
+  "devDependencies": {
+    "@opencode/plugin": "2.0.2"
+  }
+}

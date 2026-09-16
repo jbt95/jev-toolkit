@@ -81,7 +81,9 @@ interface ApiQuestion {
 
 const toApiQuestion = (question: Question): ApiQuestion => {
   const converted: ApiQuestion = { type: question._tag, instructions: question.instructions };
-  if (question.criteria !== undefined) converted.criteria = question.criteria;
+  if (question.criteria !== undefined && question.criteria !== null) {
+    converted.criteria = question.criteria;
+  }
   return converted;
 };
 

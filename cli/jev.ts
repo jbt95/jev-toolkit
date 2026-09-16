@@ -35,7 +35,7 @@ import { Harness, QuestionMap } from "../core/schema.ts";
 const AskPayload = Schema.Struct({
   state: Schema.Json,
   questions: QuestionMap,
-  model: Schema.optional(Schema.NonEmptyString),
+  model: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
 });
 const decodeAskPayload = Schema.decodeUnknownEffect(Schema.fromJsonString(AskPayload));
 
@@ -118,7 +118,7 @@ export function runCli(
             harness: "cli",
             state: payload.state,
             questions: payload.questions,
-            model: payload.model,
+            model: payload.model ?? undefined,
           })
           .pipe(Effect.mapError(describeJevError));
         yield* Effect.sync(() => {
