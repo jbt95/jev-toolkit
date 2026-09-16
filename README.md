@@ -5,6 +5,9 @@ System One decision model. One repo, four harnesses (Pi, OMP, Claude Code,
 OpenCode2), one local event log, Prometheus impact metrics on the existing
 Grafana stack.
 
+Built as an **Effect** codebase (v4 RC): services with Layers, typed errors,
+Schema-validated boundaries, no runtime dependencies besides `effect`.
+
 ## What it does
 
 - **Triggers** — makes Jev fire deterministically on quantitative judgments
@@ -22,13 +25,23 @@ Grafana stack.
 ## Layout
 
 ```
-core/               shared TypeScript (event log, Jev client, metrics, audit)
-cli/jev.ts          CLI: ask | events | meter | audit | triage | check | label
+core/               shared Effect services + Schema (event log, Jev client, metrics, audit)
+cli/jev.ts          CLI: ask | events | meter | audit | triage | check | label | hook
 bin/jev             shim for ~/.local/bin
 question-packs/     reviewer triage, failure triage, commit conformance, labels
 integrations/       opencode2 | claude-code | pi | omp
 dashboards/         canonical Grafana dashboard JSON + install script
 docs/superpowers/plans/  implementation plans
+```
+
+## Tooling
+
+`oxlint` (with vendored anti-slop rules: generic + Effect groups), `oxfmt`
+formatter, `tsc` typecheck, `vitest` tests. All four gates run before every
+commit:
+
+```console
+npm run lint && npm run format:check && npm run typecheck && npm test
 ```
 
 ## Install
