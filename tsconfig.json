@@ -11,16 +11,12 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
-  "include": [
-    "core/**/*.ts",
-    "cli/**/*.ts",
-    "mcp/**/*.ts",
-    "audit/**/*.ts",
-    "question-packs/**/*.ts",
-    "tests/**/*.ts",
-    "*.ts"
-  ],
+  "include": ["src/**/*.ts", "tests/**/*.ts", "*.ts"],
   "exclude": ["node_modules", "tools"]
 }

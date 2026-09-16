@@ -12,7 +12,7 @@ import {
   type RawOpportunity,
 } from "./opportunities.ts";
 
-const fixturesDir = join(import.meta.dirname, "..", "tests", "fixtures");
+const fixturesDir = join(import.meta.dirname, "..", "..", "tests", "fixtures");
 const since = "2026-09-16T00:00:00.000Z";
 
 describe("audit extractors", () => {

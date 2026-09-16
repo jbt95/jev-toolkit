@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import { runCli } from "../cli/jev.ts";
 import { JevClient, makeJevClient } from "../core/client.ts";
 import { EventLog, EventLogLive, makeEventLog } from "../core/events.ts";
-import { makeTestTransport, tempEventsPath } from "../tests/helpers.ts";
+import { makeTestTransport, tempEventsPath } from "../../tests/helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",

@@ -2,8 +2,8 @@ import * as Layer from "effect/Layer";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JevTransport } from "../core/client.ts";
-import { EventLogLive, type EventLog } from "../core/events.ts";
+import type { JevTransport } from "@/core/client.ts";
+import { EventLogLive, type EventLog } from "@/core/events.ts";
 
 /** Temp events.jsonl path for tests. */
 export const tempEventsPath = async (): Promise<string> =>

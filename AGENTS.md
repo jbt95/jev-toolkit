@@ -7,9 +7,14 @@
   `typescript` 5.9.2, `@types/node` 22.18.0, `vitest` 3.2.4, `oxlint` 1.81.0,
   `@oxlint/plugins` 1.81.0, `oxfmt` 0.66.0. Harness SDKs are devDependencies
   of their integration folders only.
-- TypeScript strict, ESM, explicit `.ts` relative imports
+- TypeScript strict, ESM, explicit `.ts` extensions
   (`allowImportingTsExtensions`), `verbatimModuleSyntax`, `isolatedModules`.
   No build step. Node >= 26.
+- Import paths: source under `src/` uses relative imports (the CLI runs on
+  plain Node, which ignores tsconfig paths). Tests and the OpenCode2 plugin
+  may use `@/…` (vitest alias / Bun tsconfig paths). Pi/OMP extensions must
+  use relative imports — jiti does not resolve `@/` paths (verified
+  2026-09-17).
 
 ## Effect rules (mirror ~/personal/creatorOS)
 

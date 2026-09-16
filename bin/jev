@@ -12,4 +12,4 @@ while [ -L "$target" ]; do
   esac
 done
 dir=$(cd "$(dirname "$target")" && pwd)
-exec node "$dir/../cli/jev.ts" "$@"
+exec node "$dir/../src/cli/jev.ts" "$@"

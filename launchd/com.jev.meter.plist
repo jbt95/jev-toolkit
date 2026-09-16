@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
       <string>/opt/homebrew/bin/node</string>
-      <string><HOME>/personal/jev-toolkit/cli/jev.ts</string>
+      <string><HOME>/personal/jev-toolkit/src/cli/jev.ts</string>
       <string>meter</string>
       <string>serve</string>
     </array>

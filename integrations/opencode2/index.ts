@@ -20,12 +20,12 @@ import {
   createFetchTransport,
   describeJevError,
   formatAnswers,
-} from "../../core/client.ts";
-import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../core/directives.ts";
-import { matchQuantitativeClaim } from "../../core/detector.ts";
-import { EventLogLive } from "../../core/events.ts";
-import { apiEndpoint, eventsPath } from "../../core/paths.ts";
-import { QuestionMap } from "../../core/schema.ts";
+} from "../../src/core/client.ts";
+import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../src/core/directives.ts";
+import { matchQuantitativeClaim } from "../../src/core/detector.ts";
+import { EventLogLive } from "../../src/core/events.ts";
+import { apiEndpoint, eventsPath } from "../../src/core/paths.ts";
+import { QuestionMap } from "../../src/core/schema.ts";
 
 const AskInput = Schema.Struct({
   state: Schema.Json,

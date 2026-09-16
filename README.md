@@ -25,10 +25,11 @@ Schema-validated boundaries, no runtime dependencies besides `effect`.
 ## Layout
 
 ```
-core/               shared Effect services + Schema (event log, Jev client, metrics, audit)
-cli/jev.ts          CLI: ask | events | meter | audit | triage | check | label | hook
+src/core/           shared Effect services + Schema (event log, Jev client, metrics, audit)
+src/mcp/server.ts   stdio MCP server (`jev mcp`) — the single judgment tool surface
+src/cli/jev.ts      CLI: ask | events | meter | audit | triage | check | label | hook | mcp
 bin/jev             shim for ~/.local/bin
-question-packs/     reviewer triage, failure triage, commit conformance, labels
+src/question-packs/ reviewer triage, failure triage, commit conformance, labels
 integrations/       opencode2 | claude-code | pi | omp
 dashboards/         canonical Grafana dashboard JSON + install script
 docs/superpowers/plans/  implementation plans
