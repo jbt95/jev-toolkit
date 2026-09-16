@@ -12,6 +12,7 @@ import {
   formatAnswers,
 } from "../core/client.ts";
 import { EventLog, EventLogLive } from "../core/events.ts";
+import { serveMeter } from "../core/metrics.ts";
 import { apiEndpoint, eventsPath } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
 
@@ -26,7 +27,8 @@ const USAGE = `usage: jev <command>
 
 commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
-  events   print recent events as JSON lines ([--n N] [--harness <id>])`;
+  events   print recent events as JSON lines ([--n N] [--harness <id>])
+  meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
   Effect.tryPromise({
@@ -92,6 +94,21 @@ export function runCli(
           for (const event of tail) console.log(JSON.stringify(event));
         });
         return 0;
+      }
+      case "meter": {
+        if (rest[0] !== "serve") {
+          yield* Effect.sync(() => {
+            console.error("usage: jev meter serve [--port N]");
+          });
+          return 1;
+        }
+        const log = yield* EventLog;
+        const portFlag = flag(rest, "--port") ?? process.env.JEV_METER_PORT;
+        const requestedPort = portFlag === undefined ? 8788 : Number.parseInt(portFlag, 10);
+        const port = Number.isNaN(requestedPort) ? 8788 : requestedPort;
+        return yield* serveMeter(port, log).pipe(
+          Effect.mapError(() => "meter failed to start (port in use?)"),
+        );
       }
       default: {
         yield* Effect.sync(() => {
