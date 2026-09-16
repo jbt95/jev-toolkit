@@ -1,0 +1,15 @@
+{
+  "name": "jev-toolkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-harness Jev/TypeSafe integration: deterministic triggers, triage question packs, one event log, Prometheus impact metrics.",
+  "scripts": {
+    "check": "tsc -p tsconfig.json",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.2"
+  }
+}

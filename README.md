@@ -1,0 +1,46 @@
+# jev-toolkit
+
+Multi-harness integration for [TypeSafe/Jev](https://docs.typesafe.ai) — the
+System One decision model. One repo, four harnesses (Pi, OMP, Claude Code,
+OpenCode2), one local event log, Prometheus impact metrics on the existing
+Grafana stack.
+
+## What it does
+
+- **Triggers** — makes Jev fire deterministically on quantitative judgments
+  (plugin hooks, prompt transforms), instead of relying on instructions the
+  agent can ignore.
+- **Triage question packs** — reviewer findings, harness/CI failures, commit
+  conformance.
+- **Trace labeling** — classifies agent sessions (outcome, friction, waste)
+  into the metrics stack.
+- **Impact metrics** — every call, opportunity, and label lands in one JSONL
+  event log; `jev meter serve` exposes Prometheus series scraped by
+  `~/work/claude-code-metrics` and rendered as the `Jev Impact` dashboard at
+  http://localhost:3000/d/jev-impact.
+
+## Layout
+
+```
+core/               shared TypeScript (event log, Jev client, metrics, audit)
+cli/jev.ts          CLI: ask | events | meter | audit | triage | check | label
+bin/jev             shim for ~/.local/bin
+question-packs/     reviewer triage, failure triage, commit conformance, labels
+integrations/       opencode2 | claude-code | pi | omp
+dashboards/         canonical Grafana dashboard JSON + install script
+docs/superpowers/plans/  implementation plans
+```
+
+## Install
+
+Fully documented per harness in the implementation plan:
+`docs/superpowers/plans/2026-09-16-jev-toolkit.md`.
+
+Requires: Node >= 26, `TYPESAFE_API_KEY` in the harness environments, and the
+`~/work/claude-code-metrics` stack for dashboards.
+
+## Privacy
+
+Only sanitized state (summaries, counts, masked features) is ever sent to
+`api.typesafe.ai`. Raw code, transcripts, secrets, and credentials never
+leave the machine. The event log is local-only.
