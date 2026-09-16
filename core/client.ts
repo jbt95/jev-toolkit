@@ -35,7 +35,7 @@ export interface JevTransport {
   readonly send: (body: string) => Effect.Effect<string, JevTransportFailure>;
 }
 
-export function makeFetchTransport(endpoint: string, apiKey: string): JevTransport {
+export function createFetchTransport(endpoint: string, apiKey: string): JevTransport {
   return {
     send: (body) =>
       Effect.gen(function* () {
@@ -115,8 +115,8 @@ const summarizeQuestions = (
 ): ReadonlyArray<{ readonly id: string; readonly type: "choice" | "noul" | "score" }> =>
   Object.entries(questions).map(([id, question]) => ({ id, type: question._tag }));
 
-const describeFailure = (failure: JevTransportFailure): string =>
-  failure._tag === "JevApiError" ? `TypeSafe API error ${failure.status}` : failure._tag;
+export const describeJevError = (error: JevError): string =>
+  error._tag === "JevApiError" ? `TypeSafe API error ${error.status}` : error._tag;
 
 export function makeJevClient(
   config: JevClientConfig & { readonly log: EventLogService },
@@ -167,7 +167,7 @@ export function makeJevClient(
           status: "error",
           latencyMs,
           model,
-          error: describeFailure(outcome.failure),
+          error: describeJevError(outcome.failure),
         });
         return yield* Effect.fail(outcome.failure);
       }

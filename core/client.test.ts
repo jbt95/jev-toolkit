@@ -8,7 +8,7 @@ import {
   JevApiError,
   JevClient,
   JevClientLive,
-  makeFetchTransport,
+  createFetchTransport,
   makeJevClient,
   type AskInput,
 } from "../core/client.ts";
@@ -114,7 +114,7 @@ describe("JevClient", () => {
       const log = makeEventLog(await tempEventsPath());
       const client = makeJevClient({
         apiKey: Option.some("test-key"),
-        transport: makeFetchTransport(`http://127.0.0.1:${port}/v1/systemone`, "test-key"),
+        transport: createFetchTransport(`http://127.0.0.1:${port}/v1/systemone`, "test-key"),
         log,
       });
       const result = await Effect.runPromise(client.ask(sampleInput));

@@ -1,0 +1,15 @@
+#!/bin/sh
+# jev CLI shim. Resolves its own symlink (installed as ~/.local/bin/jev) so the
+# real repo path is found, then runs the TypeScript entrypoint with Node's
+# native type stripping.
+target=$0
+while [ -L "$target" ]; do
+  dir=$(cd "$(dirname "$target")" && pwd)
+  target=$(readlink "$target")
+  case $target in
+    /*) ;;
+    *) target="$dir/$target" ;;
+  esac
+done
+dir=$(cd "$(dirname "$target")" && pwd)
+exec node "$dir/../cli/jev.ts" "$@"
