@@ -20,6 +20,8 @@ import {
   describeJevError,
   formatAnswers,
 } from "../core/client.ts";
+import { matchQuantitativeClaim } from "../core/detector.ts";
+import { PROMPT_DIRECTIVE } from "../core/directives.ts";
 import { EventLog, EventLogLive } from "../core/events.ts";
 import { serveMeter } from "../core/metrics.ts";
 import {
@@ -39,12 +41,20 @@ const AskPayload = Schema.Struct({
 });
 const decodeAskPayload = Schema.decodeUnknownEffect(Schema.fromJsonString(AskPayload));
 
+const HookInput = Schema.Struct({
+  prompt: Schema.String,
+  session_id: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+});
+const decodeHookInput = Schema.decodeUnknownOption(Schema.fromJsonString(HookInput));
+
 const USAGE = `usage: jev <command>
 
 commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
+  hook     Claude Code hooks: jev hook prompt
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
@@ -211,6 +221,25 @@ export function runCli(
         yield* Effect.sync(() => {
           printAuditSummary(correlated, dryRun);
         });
+        return 0;
+      }
+      case "hook": {
+        if (rest[0] !== "prompt") {
+          yield* Effect.sync(() => {
+            console.error("usage: jev hook prompt");
+          });
+          return 1;
+        }
+        const raw = yield* stdin();
+        const decoded = decodeHookInput(raw);
+        if (Option.isSome(decoded)) {
+          const hits = matchQuantitativeClaim(decoded.value.prompt);
+          if (hits.length > 0) {
+            yield* Effect.sync(() => {
+              console.log(PROMPT_DIRECTIVE);
+            });
+          }
+        }
         return 0;
       }
       case "meter": {

@@ -1,0 +1,5 @@
+{
+  "name": "jev-toolkit",
+  "version": "0.1.0",
+  "description": "Deterministic Jev/TypeSafe judgments for coding agents."
+}

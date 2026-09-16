@@ -84,6 +84,37 @@ describe("jev CLI", () => {
     expect(String(logSpy.mock.calls[0]?.[0])).toContain("p(yes)=0.99");
   });
 
+  it("prints the Jev directive for a quantitative prompt (hook prompt)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const input = JSON.stringify({ prompt: "What are the odds this ships on time?" });
+
+    const code = await Effect.runPromise(
+      runCli(["hook", "prompt"], layersFor(await tempEventsPath()), () => Effect.succeed(input)),
+    );
+
+    expect(code).toBe(0);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain("[Jev policy]");
+  });
+
+  it("stays silent for neutral or malformed hook input", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code1 = await Effect.runPromise(
+      runCli(["hook", "prompt"], layersFor(await tempEventsPath()), () =>
+        Effect.succeed(JSON.stringify({ prompt: "Fix the failing test." })),
+      ),
+    );
+    const code2 = await Effect.runPromise(
+      runCli(["hook", "prompt"], layersFor(await tempEventsPath()), () =>
+        Effect.succeed("not json"),
+      ),
+    );
+
+    expect(code1).toBe(0);
+    expect(code2).toBe(0);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
   it("fails with exit code 1 on an invalid ask payload", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
