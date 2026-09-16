@@ -125,9 +125,15 @@ export function runCli(
             () => "invalid ask payload on stdin: expected {state, questions, model?}",
           ),
         );
+        const harnessFlag = process.env.JEV_HARNESS;
+        const decodedHarness =
+          harnessFlag === undefined
+            ? Option.none()
+            : Schema.decodeUnknownOption(Harness)(harnessFlag);
+        const harness = Option.isSome(decodedHarness) ? decodedHarness.value : "cli";
         const result = yield* client
           .ask({
-            harness: "cli",
+            harness,
             state: payload.state,
             questions: payload.questions,
             model: payload.model ?? undefined,
