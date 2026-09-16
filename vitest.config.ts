@@ -6,6 +6,7 @@ export default defineConfig({
     include: [
       "core/**/*.test.ts",
       "cli/**/*.test.ts",
+      "mcp/**/*.test.ts",
       "audit/**/*.test.ts",
       "question-packs/**/*.test.ts",
       "tests/**/*.test.ts",

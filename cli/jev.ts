@@ -33,6 +33,7 @@ import {
   piSessionsDir,
 } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
+import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 
 const AskPayload = Schema.Struct({
   state: Schema.Json,
@@ -55,6 +56,7 @@ commands:
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     Claude Code hooks: jev hook prompt
+  mcp      stdio MCP server exposing typesafe_ask (single tool surface)
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
@@ -240,6 +242,20 @@ export function runCli(
             });
           }
         }
+        return 0;
+      }
+      case "mcp": {
+        const client = yield* JevClient;
+        const harnessFlag = process.env.JEV_HARNESS;
+        const decodedHarness =
+          harnessFlag === undefined
+            ? Option.none()
+            : Schema.decodeUnknownOption(Harness)(harnessFlag);
+        const harness = Option.isSome(decodedHarness) ? decodedHarness.value : "script";
+        yield* Effect.tryPromise({
+          try: () => serveMcp(createMcpDeps(harness, client.ask)),
+          catch: () => "mcp server failed",
+        });
         return 0;
       }
       case "meter": {

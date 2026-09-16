@@ -16,6 +16,7 @@
   "include": [
     "core/**/*.ts",
     "cli/**/*.ts",
+    "mcp/**/*.ts",
     "audit/**/*.ts",
     "question-packs/**/*.ts",
     "tests/**/*.ts",
