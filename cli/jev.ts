@@ -1,9 +1,18 @@
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+  correlate,
+  extractClaude,
+  extractOpencode,
+  extractPiOmp,
+  type CorrelatedOpportunity,
+  type RawOpportunity,
+} from "../audit/opportunities.ts";
 import {
   JevClient,
   JevClientLive,
@@ -13,7 +22,14 @@ import {
 } from "../core/client.ts";
 import { EventLog, EventLogLive } from "../core/events.ts";
 import { serveMeter } from "../core/metrics.ts";
-import { apiEndpoint, eventsPath } from "../core/paths.ts";
+import {
+  apiEndpoint,
+  claudeProjectsDir,
+  eventsPath,
+  ompSessionsDir,
+  opencodeDbPath,
+  piSessionsDir,
+} from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
 
 const AskPayload = Schema.Struct({
@@ -28,6 +44,7 @@ const USAGE = `usage: jev <command>
 commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
   events   print recent events as JSON lines ([--n N] [--harness <id>])
+  audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
@@ -45,6 +62,38 @@ const readStdin = (): Effect.Effect<string, string> =>
 const flag = (argv: ReadonlyArray<string>, name: string): string | undefined => {
   const index = argv.indexOf(name);
   return index === -1 ? undefined : argv[index + 1];
+};
+
+const parseSinceMs = (value: string): number => {
+  const match = /^(\d+)([hd])$/.exec(value);
+  if (match === null) return 24 * 60 * 60 * 1000;
+  const amount = Number.parseInt(match[1] ?? "24", 10);
+  return match[2] === "h" ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
+};
+
+const printAuditSummary = (
+  opportunities: ReadonlyArray<CorrelatedOpportunity>,
+  dryRun: boolean,
+): void => {
+  const summary = new Map<string, { total: number; matched: number }>();
+  for (const opportunity of opportunities) {
+    const entry = summary.get(opportunity.harness) ?? { total: 0, matched: 0 };
+    entry.total += 1;
+    if (opportunity.matched) entry.matched += 1;
+    summary.set(opportunity.harness, entry);
+  }
+  console.log(
+    `harness        opportunities matched missed compliance${dryRun ? " (dry run)" : ""}`,
+  );
+  const rows = [...summary.entries()].sort(([a], [b]) => a.localeCompare(b));
+  for (const [harness, counts] of rows) {
+    const missed = counts.total - counts.matched;
+    const compliance =
+      counts.total === 0 ? "0.0%" : `${((counts.matched / counts.total) * 100).toFixed(1)}%`;
+    console.log(
+      `${harness.padEnd(15)}${String(counts.total).padEnd(14)}${String(counts.matched).padEnd(8)}${String(missed).padEnd(7)}${compliance}`,
+    );
+  }
 };
 
 export function runCli(
@@ -92,6 +141,75 @@ export function runCli(
         const tail = events.slice(-limit);
         yield* Effect.sync(() => {
           for (const event of tail) console.log(JSON.stringify(event));
+        });
+        return 0;
+      }
+      case "audit": {
+        if (rest[0] !== "run") {
+          yield* Effect.sync(() => {
+            console.error(
+              "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run]",
+            );
+          });
+          return 1;
+        }
+        const log = yield* EventLog;
+        const dryRun = rest.includes("--dry-run");
+        const harnessFlag = flag(rest, "--harness") ?? "all";
+        const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
+        const now = yield* Clock.currentTimeMillis;
+        const sinceIso = new Date(now - sinceMs).toISOString();
+        const wants = (harness: string): boolean =>
+          harnessFlag === "all" || harnessFlag === harness;
+
+        const opportunities: Array<RawOpportunity> = [];
+        if (wants("opencode2")) {
+          opportunities.push(
+            ...(yield* extractOpencode(opencodeDbPath(), sinceIso).pipe(
+              Effect.mapError((error) => `audit failed: ${error.source}`),
+            )),
+          );
+        }
+        if (wants("claude-code")) {
+          opportunities.push(
+            ...(yield* extractClaude(claudeProjectsDir(), sinceIso).pipe(
+              Effect.mapError((error) => `audit failed: ${error.source}`),
+            )),
+          );
+        }
+        const piOmpRoots = [
+          { harness: "pi" as const, root: piSessionsDir() },
+          { harness: "omp" as const, root: ompSessionsDir() },
+        ].filter((entry) => wants(entry.harness));
+        if (piOmpRoots.length > 0) {
+          opportunities.push(
+            ...(yield* extractPiOmp(piOmpRoots, sinceIso).pipe(
+              Effect.mapError((error) => `audit failed: ${error.source}`),
+            )),
+          );
+        }
+
+        const events = yield* log
+          .read()
+          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+        const correlated = correlate(opportunities, events);
+        if (!dryRun) {
+          for (const opportunity of correlated) {
+            yield* log
+              .append({
+                _tag: "opportunity",
+                ts: new Date(now).toISOString(),
+                harness: opportunity.harness,
+                sessionID: opportunity.sessionID,
+                source: "assistant_message",
+                pattern: opportunity.pattern,
+                matched: opportunity.matched,
+              })
+              .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+          }
+        }
+        yield* Effect.sync(() => {
+          printAuditSummary(correlated, dryRun);
         });
         return 0;
       }

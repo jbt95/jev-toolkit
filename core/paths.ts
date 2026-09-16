@@ -13,3 +13,21 @@ export function eventsPath(): string {
 export function apiEndpoint(): string {
   return process.env.JEV_ENDPOINT ?? "https://api.typesafe.ai/v1/systemone";
 }
+
+export function opencodeDbPath(): string {
+  return (
+    process.env.JEV_OPENCODE_DB ?? join(homedir(), ".local", "share", "opencode", "opencode.db")
+  );
+}
+
+export function claudeProjectsDir(): string {
+  return join(homedir(), ".claude", "projects");
+}
+
+export function piSessionsDir(): string {
+  return join(homedir(), ".pi", "agent", "sessions");
+}
+
+export function ompSessionsDir(): string {
+  return join(homedir(), ".omp", "agent", "sessions");
+}

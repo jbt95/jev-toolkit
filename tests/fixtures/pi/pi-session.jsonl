@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"pi-session-1","timestamp":"2026-09-16T00:00:00.000Z","cwd":"/tmp"}
+{"type":"message","id":"m1","timestamp":"2026-09-16T00:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"which option is better?"}]}}
+{"type":"message","id":"m2","timestamp":"2026-09-16T00:02:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I estimate a 60% chance of success."}]}}
