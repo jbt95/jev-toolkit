@@ -35,11 +35,12 @@ Add to the global `opencode.json(c)`:
 
 ## Install the trigger plugin
 
-1. Dependencies come from the repo root (network required once). **Never
-   install inside this folder** — the plugin resolves `@/…` imports through
-   the repo tsconfig and `@opencode/plugin` through the root `node_modules`:
+1. Install the plugin dependency (network required once). The plugin loads
+   through the `~/.config/opencode/plugins/typesafe` symlink, so its bare
+   `@opencode/plugin` import resolves from this directory; relative `src/`
+   imports work through symlinks, tsconfig aliases do not:
    ```console
-   cd ~/personal/jev-toolkit && npm install
+   cd ~/personal/jev-toolkit/integrations/opencode2 && bun install
    ```
 2. Link the plugin directory:
    ```console

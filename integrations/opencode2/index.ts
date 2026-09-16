@@ -6,11 +6,14 @@
 // appends the Jev directive when a quantitative question is detected, and a
 // context hook that keeps the policy line in every model call.
 //
-// `@/…` imports resolve through the repo tsconfig (Bun supports tsconfig
-// paths); no `effect` imports live here, so the plugin stays dependency-light.
+// Imports are relative on purpose: this file is loaded through the
+// ~/.config/opencode/plugins/typesafe symlink, where tsconfig path aliases do
+// not apply but relative paths do. `@opencode/plugin` resolves from this
+// directory's node_modules (bun install here); `effect` never enters the
+// plugin, so the repo keeps a single `effect` instance.
 import { Plugin } from "@opencode/plugin";
-import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "@/core/directives.ts";
-import { matchQuantitativeClaim } from "@/core/detector.ts";
+import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../src/core/directives.ts";
+import { matchQuantitativeClaim } from "../../src/core/detector.ts";
 
 export default Plugin.define({
   id: "typesafe",

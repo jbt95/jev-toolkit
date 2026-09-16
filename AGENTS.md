@@ -10,11 +10,11 @@
 - TypeScript strict, ESM, explicit `.ts` extensions
   (`allowImportingTsExtensions`), `verbatimModuleSyntax`, `isolatedModules`.
   No build step. Node >= 26.
-- Import paths: source under `src/` uses relative imports (the CLI runs on
-  plain Node, which ignores tsconfig paths). Tests and the OpenCode2 plugin
-  may use `@/…` (vitest alias / Bun tsconfig paths). Pi/OMP extensions must
-  use relative imports — jiti does not resolve `@/` paths (verified
-  2026-09-17).
+- Import paths: everything a harness loads must use relative imports —
+  plugins/extensions load through symlinks where tsconfig aliases do not apply
+  (verified 2026-09-17 for OpenCode2's Bun loader and Pi's jiti). The `@/…`
+  alias exists for tests and repo-internal tooling only; the CLI runs on plain
+  Node, which ignores tsconfig paths.
 
 ## Effect rules (mirror ~/personal/creatorOS)
 
