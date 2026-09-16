@@ -45,8 +45,23 @@ const runJev = (
     child.stdin?.end(input);
   });
 
+/**
+ * Harness detection, in order: explicit JEV_HARNESS override; the process
+ * that hosts the extension (OMP runs from its own Bun-compiled binary --
+ * execPath ends in `/omp` -- while Pi runs under node with `pi` in argv);
+ * OMPCODE (set for OMP's spawned shells); default pi.
+ */
+const looksLikeOmp = (value: string | undefined): boolean =>
+  value !== undefined && /(?:^|[/\\])omp(?:[/\\-]|$)/iu.test(value);
+
+const detectHarness = (): "pi" | "omp" => {
+  const explicit = process.env.JEV_HARNESS;
+  if (explicit === "omp" || explicit === "pi") return explicit;
+  if (looksLikeOmp(process.execPath) || looksLikeOmp(process.argv[1])) return "omp";
+  return process.env.OMPCODE === "1" ? "omp" : "pi";
+};
 export default function jevExtension(pi: ExtensionAPI): void {
-  const harness = process.env.JEV_HARNESS === "omp" ? "omp" : "pi";
+  const harness = detectHarness();
 
   pi.registerTool({
     name: "typesafe_ask",

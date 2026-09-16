@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "description": "Multi-harness Jev/TypeSafe integration: deterministic triggers, triage question packs, one event log, Prometheus impact metrics.",
+  "keywords": [
+    "jev",
+    "pi-extension",
+    "pi-package",
+    "typesafe"
+  ],
   "type": "module",
   "scripts": {
     "lint": "oxlint .",
@@ -20,7 +26,13 @@
     "@types/node": "22.18.0",
     "oxfmt": "0.66.0",
     "oxlint": "1.81.0",
+    "typebox": "1.1.38",
     "typescript": "5.9.2",
     "vitest": "3.2.4"
+  },
+  "pi": {
+    "extensions": [
+      "./integrations/pi/index.ts"
+    ]
   }
 }
