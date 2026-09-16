@@ -22,9 +22,12 @@
   and Layer factories. Runtime code yields services from context; **only tests
   and composition roots import `make*`**
   (`anti-slop-effect/no-service-constructor-imports`).
-- Errors: plain classes extending `Error` with `readonly code = "…" as const`;
-  `return yield* Effect.fail(new X())`. No `try/catch` inside `Effect.gen`, no
-  `catchAllCause` for mapping, no silent error swallowing.
+- Errors: `Data.TaggedError` subclasses
+  (`class XError extends Data.TaggedError("XError")<{ readonly … }> {}`) so
+  failures are tag-matchable; `return yield* Effect.fail(new XError({ … }))`.
+  `Schema.TaggedError` only when the error crosses an encoding/API boundary.
+  No `try/catch` inside `Effect.gen`, no `catchAllCause` for mapping, no silent
+  error swallowing.
 - Time via `Clock.currentTimeMillis`, never `Date.now()`.
 
 ## Schema rules
