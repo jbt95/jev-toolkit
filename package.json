@@ -2,14 +2,24 @@
   "name": "jev-toolkit",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Multi-harness Jev/TypeSafe integration: deterministic triggers, triage question packs, one event log, Prometheus impact metrics.",
+  "type": "module",
   "scripts": {
-    "check": "tsc -p tsconfig.json",
-    "test": "node --test"
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
-    "@types/node": "22.20.2",
-    "typescript": "5.9.2"
+    "@oxlint/plugins": "1.81.0",
+    "@types/node": "22.18.0",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
   }
 }

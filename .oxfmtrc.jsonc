@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    "coverage/**",
+    ".git/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".opencode/**",
+    ".omp/**",
+    ".pi/**",
+    ".worktrees/**",
+    "docs/**",
+    "package-lock.json",
+    "tools/oxlint/anti-slop/**",
+  ],
+}
