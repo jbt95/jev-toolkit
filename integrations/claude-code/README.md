@@ -1,13 +1,20 @@
 # jev-toolkit for Claude Code
 
-Thin plugin around the `jev` CLI: a `UserPromptSubmit` hook that injects the
-Jev directive when a prompt asks for a quantitative judgment, plus the `jev`
-skill that teaches the agent when and how to call `jev ask`.
+Plugin with three parts:
+
+- **MCP tool** — the plugin declares the `jev` MCP server (`jev mcp`): one
+  `typesafe_ask` tool for probabilities, rankings, choices, and graded
+  estimates. No per-harness tool code; the tool arrives with the session.
+- **Prompt trigger** — a `UserPromptSubmit` hook that injects the Jev
+  directive when a quantitative question is detected.
+- **Skill** — `skills/jev/SKILL.md` teaches the agent when and how to call the
+  tool, with the `jev ask` CLI as fallback.
 
 ## Requires
 
-`jev` on `PATH` — install it with `~/personal/jev-toolkit/scripts/install.sh`
-(linked into `~/.local/bin`). The hook is silent when `jev` is absent.
+`jev` on `PATH` — install with `~/personal/jev-toolkit/scripts/install.sh`. The
+hook is silent when `jev` is absent; the MCP server reports a config error when
+`TYPESAFE_API_KEY` is missing.
 
 ## Install
 
@@ -17,14 +24,17 @@ claude plugin install jev-toolkit@jev-toolkit
 claude plugin list
 ```
 
-Restart Claude Code so the hook is picked up.
+Restart Claude Code so the hook and MCP server are picked up. Re-run
+`claude plugin install` after manifest changes — the plugin cache copies files
+at install time.
 
 ## What ships
 
+- `.claude-plugin/plugin.json` — MCP server declaration (`mcpServers.jev` →
+  `jev mcp`, `JEV_HARNESS=claude-code`).
 - `hooks/hooks.json` — `UserPromptSubmit` → `jev hook prompt`: prints the Jev
   directive only when a quantitative-intent pattern matches; never blocks.
-- `skills/jev/SKILL.md` — when and how to run `jev ask`, output format, and the
-  privacy rules.
+- `skills/jev/SKILL.md` — when and how to call `typesafe_ask`.
 
 ## Uninstall
 

@@ -1,34 +1,32 @@
 ---
 name: jev
-description: Deterministic Jev/TypeSafe judgments (probabilities, rankings, choices, graded estimates) via the `jev` CLI. Use before writing any quantitative judgment in an answer.
+description: Deterministic Jev/TypeSafe judgments (probabilities, rankings, choices, graded estimates) through the `typesafe_ask` MCP tool. Use before writing any quantitative judgment in an answer.
 ---
 
 # jev
 
-`jev` gives you calibrated, structured answers from TypeSafe/Jev — a System
-One decision model — instead of guessing numbers. One call: send state plus
-typed questions, get probabilities back.
+`typesafe_ask` (MCP server `jev`) gives you calibrated, structured answers from
+TypeSafe/Jev — a System One decision model — instead of guessing numbers. One
+call: send state plus typed questions, get probabilities back.
 
 ## When to call
 
-Call `jev ask` before writing: probabilities and likelihoods, rankings and
+Call `typesafe_ask` before writing: probabilities and likelihoods, rankings and
 priorities, choices among named alternatives, and graded estimates (severity,
 risk, quality, relevance, difficulty). Skip it for exact arithmetic, lookups,
 or trivia with no decision attached.
 
 ## How to call
 
-```console
-printf '%s' '{"state":"<text or JSON>","questions":{"q_id":{"_tag":"noul","instructions":"..."}}}' | jev ask
-```
+The tool takes `{ state, questions, model? }`:
 
-Question primitives (map of id to question):
+- `state` — text or structured JSON to evaluate.
+- `questions` — map of id to question:
+  - `{ "_tag": "choice", "instructions": "...", "criteria": { "option_a": "...", "option_b": "..." } }`
+  - `{ "_tag": "noul", "instructions": "..." }` (optional `criteria` map for true/false meaning)
+  - `{ "_tag": "score", "instructions": "...", "criteria": ["level0", "level1", "level2"] }`
 
-- `{"_tag":"choice","instructions":"...","criteria":{"option_a":"...","option_b":"..."}}`
-- `{"_tag":"noul","instructions":"..."}` (optional `criteria` map for true/false meaning)
-- `{"_tag":"score","instructions":"...","criteria":["level0","level1","level2"]}`
-
-The output looks like:
+The result is text like:
 
 ```
 jev jev-1.13.0
@@ -37,6 +35,12 @@ usage: 279 in / 22 out
 ```
 
 Ask independent questions in one call; keep one coherent judgment per question.
+
+Fallback when the MCP server is unavailable: pipe the same JSON to `jev ask`:
+
+```console
+printf '%s' '{"state":"<text or JSON>","questions":{"q_id":{"_tag":"noul","instructions":"..."}}}' | jev ask
+```
 
 ## Rules
 

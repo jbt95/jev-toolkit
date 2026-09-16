@@ -1,5 +1,12 @@
 {
   "name": "jev-toolkit",
   "version": "0.1.0",
-  "description": "Deterministic Jev/TypeSafe judgments for coding agents."
+  "description": "Deterministic Jev/TypeSafe judgments for coding agents.",
+  "mcpServers": {
+    "jev": {
+      "command": "jev",
+      "args": ["mcp"],
+      "env": { "JEV_HARNESS": "claude-code" }
+    }
+  }
 }
