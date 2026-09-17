@@ -83,6 +83,22 @@ const askTextOf = (data: string): string => {
   return fragments.join("\n");
 };
 
+const turnMatches = (turn: SessionTurn, call: CallFingerprint): boolean =>
+  call.questionIDs.every((id) => turn.askText.includes(id)) &&
+  distanceToTurn(turn, call.atMs) <= ATTRIBUTION_WINDOW_MS;
+
+/** Closer wins; an equal distance prefers the tighter turn span. */
+const isBetterTurn = (
+  candidate: SessionTurn,
+  candidateDistance: number,
+  best: SessionTurn | undefined,
+  bestDistance: number,
+): boolean => {
+  if (best === undefined) return true;
+  if (candidateDistance !== bestDistance) return candidateDistance < bestDistance;
+  return candidate.endMs - candidate.startMs < best.endMs - best.startMs;
+};
+
 /**
  * Resolve one call to the session whose turn issued its question ids. Calls with
  * no question ids are un-attributable; ties resolve to the nearest turn, then
@@ -97,20 +113,14 @@ export function attributeCalls(
     let best: SessionTurn | undefined;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (const turn of turns) {
-      if (!call.questionIDs.every((id) => turn.askText.includes(id))) continue;
+      if (!turnMatches(turn, call)) continue;
       const distance = distanceToTurn(turn, call.atMs);
-      if (distance > ATTRIBUTION_WINDOW_MS) continue;
-      const bestSpan = best === undefined ? Number.POSITIVE_INFINITY : best.endMs - best.startMs;
-      if (
-        best === undefined ||
-        distance < bestDistance ||
-        (distance === bestDistance && turn.endMs - turn.startMs < bestSpan)
-      ) {
+      if (isBetterTurn(turn, distance, best, bestDistance)) {
         best = turn;
         bestDistance = distance;
       }
     }
-    return best === undefined ? Option.none<string>() : Option.some(best.sessionID);
+    return Option.fromUndefinedOr(best).pipe(Option.map((turn) => turn.sessionID));
   });
 }
 

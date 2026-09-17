@@ -82,6 +82,71 @@ const openDb = (path: string): Effect.Effect<DatabaseSync, never, Scope.Scope> =
     (db) => Effect.sync(() => db.close()),
   );
 
+type FixtureFinding = ReturnType<typeof toFinding>;
+
+const sessionMessageTexts = (
+  sessionID: string,
+): Effect.Effect<ReadonlyArray<string>, unknown, Scope.Scope> =>
+  Effect.gen(function* () {
+    const db = yield* openDb(DEFAULT_DB);
+    const messageRows = db
+      .prepare(
+        "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq DESC LIMIT 5",
+      )
+      .all(sessionID);
+    const texts: Array<string> = [];
+    for (const messageRow of messageRows) {
+      const decodedRow = decodeMessageRow(messageRow);
+      if (Option.isNone(decodedRow)) continue;
+      const parsed = decodeMessage(decodedRow.value.data);
+      if (Option.isNone(parsed)) continue;
+      for (const part of parsed.value.content) {
+        const text = Option.fromUndefinedOr(part.text);
+        if (Option.isSome(text)) texts.push(text.value);
+      }
+    }
+    return texts;
+  });
+
+const findingsFromTexts = (texts: ReadonlyArray<string>): ReadonlyArray<FixtureFinding> =>
+  texts
+    .join("\n")
+    .split("\n")
+    .filter((line) => isFindingLine(line) && line.trim().length > 8)
+    .slice(0, 20)
+    .map(toFinding);
+
+const writeFixture = (
+  outDir: string,
+  session: Schema.Schema.Type<typeof SessionRow>,
+  findings: ReadonlyArray<FixtureFinding>,
+): Effect.Effect<void, unknown> =>
+  Effect.tryPromise({
+    try: () =>
+      writeFile(
+        join(outDir, `${session.id.slice(0, 24)}.json`),
+        JSON.stringify(
+          { meta: { sessionID: session.id, title: session.title }, findings },
+          null,
+          2,
+        ),
+      ),
+    catch: (cause) => cause,
+  });
+
+const captureSession = (
+  session: Schema.Schema.Type<typeof SessionRow>,
+  outDir: string,
+): Effect.Effect<boolean, unknown, Scope.Scope> =>
+  Effect.gen(function* () {
+    if (!session.title.toLowerCase().includes("review")) return false;
+    const texts = yield* sessionMessageTexts(session.id);
+    const findings = findingsFromTexts(texts);
+    if (findings.length === 0) return false;
+    yield* writeFixture(outDir, session, findings);
+    return true;
+  });
+
 const capture = (date: string, outDir: string): Effect.Effect<void, unknown, Scope.Scope> =>
   Effect.gen(function* () {
     const start = Date.parse(`${date}T00:00:00.000Z`);
@@ -100,45 +165,8 @@ const capture = (date: string, outDir: string): Effect.Effect<void, unknown, Sco
     for (const sessionRow of sessionRows) {
       const decodedSession = decodeSessionRow(sessionRow);
       if (Option.isNone(decodedSession)) continue;
-      const session = decodedSession.value;
-      if (!session.title.toLowerCase().includes("review")) continue;
-      const messagesDb = yield* openDb(DEFAULT_DB);
-      const messageRows = messagesDb
-        .prepare(
-          "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq DESC LIMIT 5",
-        )
-        .all(session.id);
-      const texts: Array<string> = [];
-      for (const messageRow of messageRows) {
-        const decodedRow = decodeMessageRow(messageRow);
-        if (Option.isNone(decodedRow)) continue;
-        const parsed = decodeMessage(decodedRow.value.data);
-        if (Option.isNone(parsed)) continue;
-        for (const part of parsed.value.content) {
-          const text = Option.fromUndefinedOr(part.text);
-          if (Option.isSome(text)) texts.push(text.value);
-        }
-      }
-      const findings = texts
-        .join("\n")
-        .split("\n")
-        .filter((line) => isFindingLine(line) && line.trim().length > 8)
-        .slice(0, 20)
-        .map(toFinding);
-      if (findings.length === 0) continue;
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(
-            join(outDir, `${session.id.slice(0, 24)}.json`),
-            JSON.stringify(
-              { meta: { sessionID: session.id, title: session.title }, findings },
-              null,
-              2,
-            ),
-          ),
-        catch: (cause) => cause,
-      });
-      captured += 1;
+      const wrote = yield* captureSession(decodedSession.value, outDir);
+      if (wrote) captured += 1;
     }
     yield* Effect.sync(() => {
       console.log(`captured ${captured} reviewer sessions into ${outDir}`);

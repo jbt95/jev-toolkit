@@ -30,11 +30,18 @@ import {
   createFetchTransport,
   describeJevError,
   formatAnswers,
+  type AskResult,
 } from "../core/client.ts";
 import { matchQuantitativeClaim } from "../core/detector.ts";
 import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../core/directives.ts";
-import { EventLog, EventLogLive } from "../core/events.ts";
-import { LoopGuard, LoopGuardLive, fingerprint } from "../core/loops.ts";
+import { EventLog, EventLogLive, type EventLogService } from "../core/events.ts";
+import {
+  LoopGuard,
+  LoopGuardLive,
+  fingerprint,
+  type LoopCheck,
+  type LoopGuardService,
+} from "../core/loops.ts";
 import { serveMeter } from "../core/metrics.ts";
 import {
   apiEndpoint,
@@ -45,10 +52,10 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import { Harness, QuestionMap, type Answer } from "../core/schema.ts";
+import { Harness, QuestionMap, type Answer, type JevEvent } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
-import { createMcpDeps, serveMcp } from "../mcp/server.ts";
+import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
 import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import { claimDetectionQuestions, detectedClaims } from "../question-packs/claim-detection.ts";
@@ -223,6 +230,58 @@ const harnessFromEnv = (fallback: Harness): Harness =>
 
 export type CliServices = JevClient | EventLog | LoopGuard;
 
+const runHook = (
+  rest: ReadonlyArray<string>,
+  stdin: () => Effect.Effect<string, string>,
+): Effect.Effect<number, string> =>
+  Effect.gen(function* () {
+    if (rest[0] === "context") {
+      yield* Effect.sync(() => {
+        console.log(CONTEXT_POLICY);
+      });
+      return 0;
+    }
+    if (rest[0] !== "prompt") {
+      yield* Effect.sync(() => {
+        console.error("usage: jev hook prompt | jev hook context");
+      });
+      return 1;
+    }
+    const raw = yield* stdin();
+    const decoded = decodeHookInput(raw);
+    if (Option.isSome(decoded)) {
+      const hits = matchQuantitativeClaim(decoded.value.prompt);
+      if (hits.length > 0) {
+        yield* Effect.sync(() => {
+          console.log(PROMPT_DIRECTIVE);
+        });
+      }
+    }
+    return 0;
+  });
+
+const runMeter = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    if (rest[0] !== "serve") {
+      yield* Effect.sync(() => {
+        console.error("usage: jev meter serve [--port N]");
+      });
+      return 1;
+    }
+    const log = yield* EventLog;
+    const port = Option.firstSomeOf([
+      flag(rest, "--port"),
+      Option.fromUndefinedOr(process.env.JEV_METER_PORT),
+    ]).pipe(
+      Option.map((raw) => Number.parseInt(raw, 10)),
+      Option.filter((parsed) => !Number.isNaN(parsed)),
+      Option.getOrElse(() => 8788),
+    );
+    return yield* serveMeter(port, log).pipe(
+      Effect.mapError(() => "meter failed to start (port in use?)"),
+    );
+  });
+
 export function runCli(
   argv: ReadonlyArray<string>,
   layers: Layer.Layer<CliServices>,
@@ -287,29 +346,7 @@ export function runCli(
         return yield* runEval(rest);
       }
       case "hook": {
-        if (rest[0] === "context") {
-          yield* Effect.sync(() => {
-            console.log(CONTEXT_POLICY);
-          });
-          return 0;
-        }
-        if (rest[0] !== "prompt") {
-          yield* Effect.sync(() => {
-            console.error("usage: jev hook prompt | jev hook context");
-          });
-          return 1;
-        }
-        const raw = yield* stdin();
-        const decoded = decodeHookInput(raw);
-        if (Option.isSome(decoded)) {
-          const hits = matchQuantitativeClaim(decoded.value.prompt);
-          if (hits.length > 0) {
-            yield* Effect.sync(() => {
-              console.log(PROMPT_DIRECTIVE);
-            });
-          }
-        }
-        return 0;
+        return yield* runHook(rest, stdin);
       }
       case "mcp": {
         const client = yield* JevClient;
@@ -322,24 +359,7 @@ export function runCli(
         return 0;
       }
       case "meter": {
-        if (rest[0] !== "serve") {
-          yield* Effect.sync(() => {
-            console.error("usage: jev meter serve [--port N]");
-          });
-          return 1;
-        }
-        const log = yield* EventLog;
-        const port = Option.firstSomeOf([
-          flag(rest, "--port"),
-          Option.fromUndefinedOr(process.env.JEV_METER_PORT),
-        ]).pipe(
-          Option.map((raw) => Number.parseInt(raw, 10)),
-          Option.filter((parsed) => !Number.isNaN(parsed)),
-          Option.getOrElse(() => 8788),
-        );
-        return yield* serveMeter(port, log).pipe(
-          Effect.mapError(() => "meter failed to start (port in use?)"),
-        );
+        return yield* runMeter(rest);
       }
       default: {
         yield* Effect.sync(() => {
@@ -412,97 +432,92 @@ const runEval = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cli
     return 0;
   });
 
-const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+const detectPromptClaims = (
+  ask: JevAsk,
+  harness: Harness,
+  messages: ReadonlyArray<RawMessage>,
+): Effect.Effect<Map<number, string>, string> =>
   Effect.gen(function* () {
-    const client = yield* JevClient;
-    const harness = harnessFromEnv("script");
-    if (rest[0] === "prompts") {
-      const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "7d")));
-      const now = yield* Clock.currentTimeMillis;
-      const sinceIso = new Date(now - sinceMs).toISOString();
-      const messages = yield* extractOpencode(opencodeDbPath(), sinceIso, "user").pipe(
-        Effect.mapError((error) => `audit failed: ${error.source}`),
-      );
-      const regexTagged = messages.map(
-        (message) => matchQuantitativeClaim(message.text).length > 0,
-      );
-      const detectedIndexes = new Map<number, string>();
-      for (let start = 0; start < messages.length; start += 20) {
-        const batch = messages.slice(start, start + 20);
-        const result = yield* client
-          .ask({
-            harness,
-            state: {
-              messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
-            },
-            questions: claimDetectionQuestions({
-              count: batch.length,
-              subject: "user_prompt",
-            }),
-          })
-          .pipe(Effect.mapError(describeJevError));
-        for (const found of detectedClaims(result.answers, batch.length)) {
-          detectedIndexes.set(start + found.index, found.kind);
-        }
+    const detected = new Map<number, string>();
+    for (let start = 0; start < messages.length; start += 20) {
+      const batch = messages.slice(start, start + 20);
+      const result = yield* ask({
+        harness,
+        state: {
+          messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
+        },
+        questions: claimDetectionQuestions({ count: batch.length, subject: "user_prompt" }),
+      }).pipe(Effect.mapError(describeJevError));
+      for (const found of detectedClaims(result.answers, batch.length)) {
+        detected.set(start + found.index, found.kind);
       }
-      const missed = [...detectedIndexes.keys()].filter((index) => regexTagged[index] !== true);
-      const noise = regexTagged.flatMap((tagged, index) =>
-        tagged && !detectedIndexes.has(index) ? [index] : [],
-      );
-      yield* Effect.sync(() => {
-        printPromptSummary({
-          prompts: messages.length,
-          regexTagged: regexTagged.filter(Boolean).length,
-          detected: detectedIndexes.size,
-          missed: missed.length,
-          missedExamples: missed
-            .slice(0, 5)
-            .flatMap((index) =>
-              Option.toArray(
-                Option.map(Option.fromUndefinedOr(messages[index]), (message) =>
-                  message.text.slice(0, 100),
-                ),
-              ),
-            ),
-          detectedExamples: [...detectedIndexes.entries()]
-            .slice(0, 5)
-            .flatMap(([index, kind]) =>
-              Option.toArray(
-                Option.map(
-                  Option.fromUndefinedOr(messages[index]),
-                  (message) => `${kind}: ${message.text.slice(0, 90)}`,
-                ),
-              ),
-            ),
-          noiseExamples: noise
-            .slice(0, 5)
-            .flatMap((index) =>
-              Option.toArray(
-                Option.map(Option.fromUndefinedOr(messages[index]), (message) =>
-                  message.text.slice(0, 100),
-                ),
-              ),
-            ),
-        });
-      });
-      return 0;
     }
-    if (rest[0] !== "run") {
-      yield* Effect.sync(() => {
-        console.error(
-          "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run] | jev audit prompts [--since 7d]",
-        );
-      });
-      return 1;
-    }
-    const log = yield* EventLog;
-    const dryRun = rest.includes("--dry-run");
-    const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
-    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
+    return detected;
+  });
+
+const promptExamples = (
+  indexes: ReadonlyArray<number>,
+  messages: ReadonlyArray<RawMessage>,
+  render: (message: RawMessage) => string,
+): ReadonlyArray<string> =>
+  indexes
+    .slice(0, 5)
+    .flatMap((index) =>
+      Option.toArray(Option.map(Option.fromUndefinedOr(messages[index]), render)),
+    );
+
+const detectedExamples = (
+  detected: ReadonlyMap<number, string>,
+  messages: ReadonlyArray<RawMessage>,
+): ReadonlyArray<string> =>
+  [...detected.entries()]
+    .slice(0, 5)
+    .flatMap(([index, kind]) =>
+      Option.toArray(
+        Option.map(
+          Option.fromUndefinedOr(messages[index]),
+          (message) => `${kind}: ${message.text.slice(0, 90)}`,
+        ),
+      ),
+    );
+
+const runAuditPrompts = (
+  ask: JevAsk,
+  harness: Harness,
+  rest: ReadonlyArray<string>,
+): Effect.Effect<number, string> =>
+  Effect.gen(function* () {
+    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "7d")));
     const now = yield* Clock.currentTimeMillis;
     const sinceIso = new Date(now - sinceMs).toISOString();
-    const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
+    const messages = yield* extractOpencode(opencodeDbPath(), sinceIso, "user").pipe(
+      Effect.mapError((error) => `audit failed: ${error.source}`),
+    );
+    const regexTagged = messages.map((message) => matchQuantitativeClaim(message.text).length > 0);
+    const detectedIndexes = yield* detectPromptClaims(ask, harness, messages);
+    const missed = [...detectedIndexes.keys()].filter((index) => regexTagged[index] !== true);
+    const noise = regexTagged.flatMap((tagged, index) =>
+      tagged && !detectedIndexes.has(index) ? [index] : [],
+    );
+    yield* Effect.sync(() => {
+      printPromptSummary({
+        prompts: messages.length,
+        regexTagged: regexTagged.filter(Boolean).length,
+        detected: detectedIndexes.size,
+        missed: missed.length,
+        missedExamples: promptExamples(missed, messages, (message) => message.text.slice(0, 100)),
+        detectedExamples: detectedExamples(detectedIndexes, messages),
+        noiseExamples: promptExamples(noise, messages, (message) => message.text.slice(0, 100)),
+      });
+    });
+    return 0;
+  });
 
+const extractAuditMessages = (
+  wants: (harness: string) => boolean,
+  sinceIso: string,
+): Effect.Effect<ReadonlyArray<RawMessage>, string> =>
+  Effect.gen(function* () {
     const messages: Array<RawMessage> = [];
     if (wants("opencode2")) {
       // Both surfaces: user turns are the demand signal, assistant turns the
@@ -535,28 +550,154 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
         )),
       );
     }
+    return messages;
+  });
 
-    // Stage 1: detect claims with Jev (batches of 20 messages, 2 questions each).
+/** Stage 1: detect claims with Jev (batches of 20 messages, 2 questions each). */
+const detectAuditClaims = (
+  ask: JevAsk,
+  harness: Harness,
+  messages: ReadonlyArray<RawMessage>,
+): Effect.Effect<ReadonlyArray<DetectedOpportunity>, string> =>
+  Effect.gen(function* () {
     const detected: Array<DetectedOpportunity> = [];
     for (let start = 0; start < messages.length; start += 20) {
       const batch = messages.slice(start, start + 20);
-      const result = yield* client
-        .ask({
-          harness,
-          state: {
-            messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
-          },
-          questions: claimDetectionQuestions({
-            count: batch.length,
-            subject: "assistant_message",
-          }),
-        })
-        .pipe(Effect.mapError(describeJevError));
+      const result = yield* ask({
+        harness,
+        state: {
+          messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
+        },
+        questions: claimDetectionQuestions({ count: batch.length, subject: "assistant_message" }),
+      }).pipe(Effect.mapError(describeJevError));
       for (const found of detectedClaims(result.answers, batch.length)) {
         const message = Option.fromUndefinedOr(batch[found.index]);
         if (Option.isSome(message)) detected.push(toDetectedOpportunity(message.value, found.kind));
       }
     }
+    return detected;
+  });
+
+const buildSessionQuestions = (
+  events: ReadonlyArray<JevEvent>,
+  inferredSessions: ReadonlyMap<number, string>,
+): Map<string, Array<string>> => {
+  const sessionQuestions = new Map<string, Array<string>>();
+  let unattributed = 0;
+  for (const event of events) {
+    if (event._tag !== "call") continue;
+    let sessionID = Option.fromUndefinedOr(event.sessionID);
+    if (Option.isNone(sessionID) && event.harness === "opencode2") {
+      sessionID = Option.fromUndefinedOr(inferredSessions.get(unattributed));
+      unattributed += 1;
+    }
+    if (Option.isNone(sessionID)) continue;
+    const key = `${event.harness}|${sessionID.value}`;
+    const list = sessionQuestions.get(key) ?? [];
+    for (const question of event.questions) {
+      if (!list.includes(question.id)) list.push(question.id);
+    }
+    sessionQuestions.set(key, list);
+  }
+  return sessionQuestions;
+};
+
+/** Stage 2: align each detected claim with the questions asked in its session. */
+const correlateAuditClaims = (
+  ask: JevAsk,
+  harness: Harness,
+  detected: ReadonlyArray<DetectedOpportunity>,
+  sessionQuestions: ReadonlyMap<string, ReadonlyArray<string>>,
+): Effect.Effect<ReadonlyArray<CorrelatedOpportunity>, string> =>
+  Effect.gen(function* () {
+    const bySession = new Map<string, Array<DetectedOpportunity>>();
+    for (const item of detected) {
+      const key = `${item.harness}|${item.sessionID}`;
+      const list = bySession.get(key) ?? [];
+      list.push(item);
+      bySession.set(key, list);
+    }
+    const correlated: Array<CorrelatedOpportunity> = [];
+    for (const [key, items] of bySession) {
+      const questions = Option.fromUndefinedOr(sessionQuestions.get(key)).pipe(
+        Option.filter((list) => list.length > 0),
+      );
+      if (Option.isNone(questions)) {
+        for (const item of items) correlated.push({ ...item, matched: false });
+        continue;
+      }
+      for (let start = 0; start < items.length; start += 20) {
+        const batch = items.slice(start, start + 20);
+        const result = yield* ask({
+          harness,
+          state: {
+            sessionQuestions: questions.value.slice(0, 40),
+            claims: batch.map((item, index) => ({
+              id: `a${index}`,
+              pattern: item.pattern,
+              excerpt: item.context,
+            })),
+          },
+          questions: claimAlignmentQuestions(
+            batch.map((item, index) => ({ id: `a${index}`, excerpt: item.context })),
+          ),
+        }).pipe(Effect.mapError(describeJevError));
+        const matchedIndexes = new Set(alignedIndexes(result.answers, batch.length));
+        batch.forEach((item, index) => {
+          correlated.push({ ...item, matched: matchedIndexes.has(index) });
+        });
+      }
+    }
+    return correlated;
+  });
+
+const appendOpportunityEvents = (
+  log: EventLogService,
+  correlated: ReadonlyArray<CorrelatedOpportunity>,
+  now: number,
+): Effect.Effect<void, string> =>
+  Effect.gen(function* () {
+    for (const opportunity of correlated) {
+      yield* log
+        .append({
+          _tag: "opportunity",
+          ts: new Date(now).toISOString(),
+          harness: opportunity.harness,
+          sessionID: opportunity.sessionID,
+          source: opportunity.source,
+          pattern: opportunity.pattern,
+          matched: opportunity.matched,
+        })
+        .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    }
+  });
+
+const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    const client = yield* JevClient;
+    const harness = harnessFromEnv("script");
+    if (rest[0] === "prompts") {
+      return yield* runAuditPrompts(client.ask, harness, rest);
+    }
+    if (rest[0] !== "run") {
+      yield* Effect.sync(() => {
+        console.error(
+          "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run] | jev audit prompts [--since 7d]",
+        );
+      });
+      return 1;
+    }
+    const log = yield* EventLog;
+    const dryRun = rest.includes("--dry-run");
+    const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
+    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
+    const now = yield* Clock.currentTimeMillis;
+    const sinceIso = new Date(now - sinceMs).toISOString();
+    const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
+
+    const messages = yield* extractAuditMessages(wants, sinceIso);
+
+    const detected = yield* detectAuditClaims(client.ask, harness, messages);
 
     // Stage 2: align each detected claim with the questions asked in its session.
     const events = yield* log
@@ -585,79 +726,11 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     ).forEach((sessionID, index) => {
       if (Option.isSome(sessionID)) inferredSessions.set(index, sessionID.value);
     });
-    const sessionQuestions = new Map<string, Array<string>>();
-    let unattributed = 0;
-    for (const event of events) {
-      if (event._tag !== "call") continue;
-      let sessionID = Option.fromUndefinedOr(event.sessionID);
-      if (Option.isNone(sessionID) && event.harness === "opencode2") {
-        sessionID = Option.fromUndefinedOr(inferredSessions.get(unattributed));
-        unattributed += 1;
-      }
-      if (Option.isNone(sessionID)) continue;
-      const key = `${event.harness}|${sessionID.value}`;
-      const list = sessionQuestions.get(key) ?? [];
-      for (const question of event.questions) {
-        if (!list.includes(question.id)) list.push(question.id);
-      }
-      sessionQuestions.set(key, list);
-    }
-    const bySession = new Map<string, Array<DetectedOpportunity>>();
-    for (const item of detected) {
-      const key = `${item.harness}|${item.sessionID}`;
-      const list = bySession.get(key) ?? [];
-      list.push(item);
-      bySession.set(key, list);
-    }
-    const correlated: Array<CorrelatedOpportunity> = [];
-    for (const [key, items] of bySession) {
-      const questions = Option.fromUndefinedOr(sessionQuestions.get(key)).pipe(
-        Option.filter((list) => list.length > 0),
-      );
-      if (Option.isNone(questions)) {
-        for (const item of items) correlated.push({ ...item, matched: false });
-        continue;
-      }
-      for (let start = 0; start < items.length; start += 20) {
-        const batch = items.slice(start, start + 20);
-        const result = yield* client
-          .ask({
-            harness,
-            state: {
-              sessionQuestions: questions.value.slice(0, 40),
-              claims: batch.map((item, index) => ({
-                id: `a${index}`,
-                pattern: item.pattern,
-                excerpt: item.context,
-              })),
-            },
-            questions: claimAlignmentQuestions(
-              batch.map((item, index) => ({ id: `a${index}`, excerpt: item.context })),
-            ),
-          })
-          .pipe(Effect.mapError(describeJevError));
-        const matchedIndexes = new Set(alignedIndexes(result.answers, batch.length));
-        batch.forEach((item, index) => {
-          correlated.push({ ...item, matched: matchedIndexes.has(index) });
-        });
-      }
-    }
+    const sessionQuestions = buildSessionQuestions(events, inferredSessions);
 
-    if (!dryRun) {
-      for (const opportunity of correlated) {
-        yield* log
-          .append({
-            _tag: "opportunity",
-            ts: new Date(now).toISOString(),
-            harness: opportunity.harness,
-            sessionID: opportunity.sessionID,
-            source: opportunity.source,
-            pattern: opportunity.pattern,
-            matched: opportunity.matched,
-          })
-          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
-      }
-    }
+    const correlated = yield* correlateAuditClaims(client.ask, harness, detected, sessionQuestions);
+
+    if (!dryRun) yield* appendOpportunityEvents(log, correlated, now);
     yield* Effect.sync(() => {
       printAuditSummary({ messages, correlated }, dryRun);
     });
@@ -900,186 +973,183 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     return verdict.passed ? 0 : 1;
   });
 
-const runTriage = (
-  rest: ReadonlyArray<string>,
-  stdin: () => Effect.Effect<string, string>,
-): Effect.Effect<number, string, CliServices> =>
+const runTriageReview = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
   Effect.gen(function* () {
-    if (rest[0] === "review") {
-      const inputFlag = flag(rest, "--input");
-      if (Option.isNone(inputFlag)) {
-        yield* Effect.sync(() => {
-          console.error("usage: jev triage review --input findings.json");
-        });
-        return 1;
-      }
-      const client = yield* JevClient;
-      const log = yield* EventLog;
-      const harness = harnessFromEnv("cli");
-      const raw = yield* Effect.tryPromise({
-        try: () => readFile(inputFlag.value, "utf8"),
-        catch: () => `cannot read findings file: ${inputFlag.value}`,
-      });
-      const review = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewInput))(
-        raw,
-      ).pipe(
-        Effect.mapError(
-          () =>
-            "invalid findings JSON: expected { findings: [{ id, title, detail, file?, line? }] }",
-        ),
-      );
-      const findings = review.findings;
-      const sanitized = findings.map((finding) => ({
-        ...finding,
-        title: clip(redact(stripFencedCode(finding.title))),
-        detail: clip(redact(stripFencedCode(finding.detail))),
-      }));
-      const result = yield* client
-        .ask({ harness, state: { findings: sanitized }, questions: reviewQuestions(sanitized) })
-        .pipe(Effect.mapError(describeJevError));
-      const routed = routeTriage(findings, result.answers);
-      const now = yield* Clock.currentTimeMillis;
-      yield* log
-        .append({
-          _tag: "triage",
-          ts: new Date(now).toISOString(),
-          harness,
-          feature: "review",
-          summary: {
-            findings: findings.length,
-            blockers: routed.blockers.length,
-            cosmetic: routed.cosmetic.length,
-            questions: routed.questions.length,
-            substantive: routed.reviewSubstantive ? 1 : 0,
-            truncated: routed.truncated ? 1 : 0,
-          },
-        })
-        .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    const inputFlag = flag(rest, "--input");
+    if (Option.isNone(inputFlag)) {
       yield* Effect.sync(() => {
-        console.log(JSON.stringify(routed, null, 2));
-      });
-      return 0;
-    }
-    if (rest[0] !== "failure") {
-      yield* Effect.sync(() => {
-        console.error(
-          "usage: jev triage failure [--text FILE|-] [--transcript FILE] | jev triage review --input findings.json",
-        );
+        console.error("usage: jev triage review --input findings.json");
       });
       return 1;
     }
     const client = yield* JevClient;
-    const guard = yield* LoopGuard;
     const log = yield* EventLog;
     const harness = harnessFromEnv("cli");
-    const textFlag = flag(rest, "--text");
-    const transcriptFlag = flag(rest, "--transcript");
-    let failureText: string;
-    let source: string;
-    if (Option.isSome(transcriptFlag)) {
-      const transcriptPath = transcriptFlag.value;
-      const raw = yield* Effect.tryPromise({
-        try: () => readFile(transcriptPath, "utf8"),
-        catch: () => `cannot read transcript: ${transcriptPath}`,
+    const raw = yield* Effect.tryPromise({
+      try: () => readFile(inputFlag.value, "utf8"),
+      catch: () => `cannot read findings file: ${inputFlag.value}`,
+    });
+    const review = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewInput))(raw).pipe(
+      Effect.mapError(
+        () => "invalid findings JSON: expected { findings: [{ id, title, detail, file?, line? }] }",
+      ),
+    );
+    const findings = review.findings;
+    const sanitized = findings.map((finding) => ({
+      ...finding,
+      title: clip(redact(stripFencedCode(finding.title))),
+      detail: clip(redact(stripFencedCode(finding.detail))),
+    }));
+    const result = yield* client
+      .ask({ harness, state: { findings: sanitized }, questions: reviewQuestions(sanitized) })
+      .pipe(Effect.mapError(describeJevError));
+    const routed = routeTriage(findings, result.answers);
+    const now = yield* Clock.currentTimeMillis;
+    yield* log
+      .append({
+        _tag: "triage",
+        ts: new Date(now).toISOString(),
+        harness,
+        feature: "review",
+        summary: {
+          findings: findings.length,
+          blockers: routed.blockers.length,
+          cosmetic: routed.cosmetic.length,
+          questions: routed.questions.length,
+          substantive: routed.reviewSubstantive ? 1 : 0,
+          truncated: routed.truncated ? 1 : 0,
+        },
+      })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    yield* Effect.sync(() => {
+      console.log(JSON.stringify(routed, null, 2));
+    });
+    return 0;
+  });
+
+interface FailureSelection {
+  readonly text: string;
+  readonly source: string;
+}
+
+const transcriptFailureText = (
+  ask: JevAsk,
+  harness: Harness,
+  transcriptPath: string,
+): Effect.Effect<Option.Option<string>, string> =>
+  Effect.gen(function* () {
+    const raw = yield* Effect.tryPromise({
+      try: () => readFile(transcriptPath, "utf8"),
+      catch: () => `cannot read transcript: ${transcriptPath}`,
+    });
+    const candidates = transcriptFailureCandidates(raw);
+    if (candidates.length === 0) {
+      yield* Effect.sync(() => {
+        console.error("no failing entry found in the transcript's last 40 lines");
       });
-      const candidates = transcriptFailureCandidates(raw);
-      if (candidates.length === 0) {
-        yield* Effect.sync(() => {
-          console.error("no failing entry found in the transcript's last 40 lines");
-        });
-        return 1;
-      }
-      // Transcript snippets can contain raw code or credentials; mask before sending.
-      const maskedCandidates = candidates.map((candidate) =>
-        clip(stripFencedCode(redact(candidate)), 600),
-      );
-      if (maskedCandidates.length === 1) {
-        failureText = Option.fromUndefinedOr(maskedCandidates[0]).pipe(Option.getOrElse(() => ""));
-      } else {
-        const selection = yield* client
-          .ask({
-            harness,
-            state: { candidates: maskedCandidates },
-            questions: transcriptSelectionQuestions({ candidates: maskedCandidates }),
-          })
-          .pipe(Effect.mapError(describeJevError));
-        const index = Option.fromUndefinedOr(selection.answers["failure_index"]).pipe(
-          Option.filter(
-            (answer): answer is Extract<Answer, { readonly _tag: "choice" }> =>
-              answer._tag === "choice",
-          ),
-          Option.map((answer) => Number.parseInt(answer.choice.replace("candidate_", ""), 10)),
-          Option.filter((parsed) => !Number.isNaN(parsed)),
-          Option.getOrElse(() => -1),
-        );
-        const selected = Option.fromUndefinedOr(candidates[index]);
-        if (Option.isNone(selected)) {
-          yield* Effect.sync(() => {
-            console.error("no failing entry selected in the transcript");
-          });
-          return 1;
-        }
-        failureText = selected.value;
-      }
-      source = "transcript";
-    } else if (Option.isSome(textFlag) && textFlag.value !== "-") {
+      return Option.none();
+    }
+    // Transcript snippets can contain raw code or credentials; mask before sending.
+    const maskedCandidates = candidates.map((candidate) =>
+      clip(stripFencedCode(redact(candidate)), 600),
+    );
+    if (maskedCandidates.length === 1) return Option.fromUndefinedOr(maskedCandidates[0]);
+    const selection = yield* ask({
+      harness,
+      state: { candidates: maskedCandidates },
+      questions: transcriptSelectionQuestions({ candidates: maskedCandidates }),
+    }).pipe(Effect.mapError(describeJevError));
+    const index = Option.fromUndefinedOr(selection.answers["failure_index"]).pipe(
+      Option.filter(
+        (answer): answer is Extract<Answer, { readonly _tag: "choice" }> =>
+          answer._tag === "choice",
+      ),
+      Option.map((answer) => Number.parseInt(answer.choice.replace("candidate_", ""), 10)),
+      Option.filter((parsed) => !Number.isNaN(parsed)),
+      Option.getOrElse(() => -1),
+    );
+    const selected = Option.fromUndefinedOr(candidates[index]);
+    if (Option.isNone(selected)) {
+      yield* Effect.sync(() => {
+        console.error("no failing entry selected in the transcript");
+      });
+      return Option.none();
+    }
+    return Option.some(selected.value);
+  });
+
+const selectFailureText = (
+  ask: JevAsk,
+  harness: Harness,
+  rest: ReadonlyArray<string>,
+  stdin: () => Effect.Effect<string, string>,
+): Effect.Effect<Option.Option<FailureSelection>, string> =>
+  Effect.gen(function* () {
+    const transcriptFlag = flag(rest, "--transcript");
+    if (Option.isSome(transcriptFlag)) {
+      const text = yield* transcriptFailureText(ask, harness, transcriptFlag.value);
+      return Option.map(text, (value): FailureSelection => ({ text: value, source: "transcript" }));
+    }
+    const textFlag = flag(rest, "--text");
+    if (Option.isSome(textFlag) && textFlag.value !== "-") {
       const textPath = textFlag.value;
-      failureText = yield* Effect.tryPromise({
+      const text = yield* Effect.tryPromise({
         try: () => readFile(textPath, "utf8"),
         catch: () => `cannot read failure text: ${textPath}`,
       });
-      source = "text";
-    } else {
-      failureText = yield* stdin();
-      source = "stdin";
+      return Option.some({ text, source: "text" });
     }
+    const text = yield* stdin();
+    return Option.some({ text, source: "stdin" });
+  });
 
+const canonicalFailureFingerprint = (
+  ask: JevAsk,
+  harness: Harness,
+  guard: LoopGuardService,
+  failureText: string,
+): Effect.Effect<string, string> =>
+  Effect.gen(function* () {
     const fp = fingerprint(failureText);
     const safeFailure = clip(stripFencedCode(redact(failureText)));
     const recent = yield* guard
       .recent(5)
       .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
     const similar = recent.filter((entry) => entry.fingerprint !== fp);
-    let canonical = fp;
-    if (similar.length > 0) {
-      const selection = yield* client
-        .ask({
-          harness,
-          state: {
-            current: safeFailure.slice(0, 600),
-            recent: similar.map((entry) => ({
-              fingerprint: entry.fingerprint,
-              sample: entry.sample,
-            })),
-          },
-          questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
-        })
-        .pipe(Effect.mapError(describeJevError));
-      const answer = Option.fromUndefinedOr(selection.answers["same_as"]).pipe(
-        Option.filter(
-          (same): same is Extract<Answer, { readonly _tag: "choice" }> => same._tag === "choice",
-        ),
-        Option.map((same) => Number.parseInt(same.choice.replace("recent_", ""), 10)),
-        Option.filter((parsed) => !Number.isNaN(parsed)),
-        Option.flatMap((parsed) => Option.fromUndefinedOr(similar[parsed])),
-      );
-      if (Option.isSome(answer)) canonical = answer.value.fingerprint;
-    }
-    const loop = yield* guard
-      .check(canonical, safeFailure.slice(0, 400))
-      .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
-    const result = yield* client
-      .ask({
-        harness,
-        state: {
-          source,
-          repeats: loop.count,
-          failure: clip(stripFencedCode(redact(failureText))),
-        },
-        questions: failureQuestions({ text: failureText, source, repeats: loop.count }),
-      })
-      .pipe(Effect.mapError(describeJevError));
+    if (similar.length === 0) return fp;
+    const selection = yield* ask({
+      harness,
+      state: {
+        current: safeFailure.slice(0, 600),
+        recent: similar.map((entry) => ({
+          fingerprint: entry.fingerprint,
+          sample: entry.sample,
+        })),
+      },
+      questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
+    }).pipe(Effect.mapError(describeJevError));
+    const answer = Option.fromUndefinedOr(selection.answers["same_as"]).pipe(
+      Option.filter(
+        (same): same is Extract<Answer, { readonly _tag: "choice" }> => same._tag === "choice",
+      ),
+      Option.map((same) => Number.parseInt(same.choice.replace("recent_", ""), 10)),
+      Option.filter((parsed) => !Number.isNaN(parsed)),
+      Option.flatMap((parsed) => Option.fromUndefinedOr(similar[parsed])),
+    );
+    return Option.match(answer, {
+      onNone: () => fp,
+      onSome: (entry) => entry.fingerprint,
+    });
+  });
 
+const reportFailure = (
+  log: EventLogService,
+  harness: Harness,
+  canonical: string,
+  loop: LoopCheck,
+  result: AskResult,
+): Effect.Effect<void, string> =>
+  Effect.gen(function* () {
     const classAnswer = Option.fromUndefinedOr(result.answers["class"]).pipe(
       Option.filter(
         (classified): classified is Extract<Answer, { readonly _tag: "choice" }> =>
@@ -1124,8 +1194,9 @@ const runTriage = (
           `failure class: ${classAnswer.value.choice} (confidence ${classAnswer.value.confidence})`,
         );
       }
-      if (Option.isSome(blocksAnswer))
+      if (Option.isSome(blocksAnswer)) {
         console.log(`blocks_work: p(yes)=${blocksAnswer.value.noul}`);
+      }
       if (Option.isSome(suppressAnswer)) {
         console.log(`safe_to_suppress: p(yes)=${suppressAnswer.value.noul}`);
       }
@@ -1135,9 +1206,64 @@ const runTriage = (
         );
       }
     });
+  });
+
+const runTriageFailure = (
+  rest: ReadonlyArray<string>,
+  stdin: () => Effect.Effect<string, string>,
+): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    const client = yield* JevClient;
+    const guard = yield* LoopGuard;
+    const log = yield* EventLog;
+    const harness = harnessFromEnv("cli");
+    const selection = yield* selectFailureText(client.ask, harness, rest, stdin);
+    if (Option.isNone(selection)) return 1;
+    const canonical = yield* canonicalFailureFingerprint(
+      client.ask,
+      harness,
+      guard,
+      selection.value.text,
+    );
+    const safeFailure = clip(stripFencedCode(redact(selection.value.text)));
+    const loop = yield* guard
+      .check(canonical, safeFailure.slice(0, 400))
+      .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
+    const result = yield* client
+      .ask({
+        harness,
+        state: {
+          source: selection.value.source,
+          repeats: loop.count,
+          failure: safeFailure,
+        },
+        questions: failureQuestions({
+          text: selection.value.text,
+          source: selection.value.source,
+          repeats: loop.count,
+        }),
+      })
+      .pipe(Effect.mapError(describeJevError));
+    yield* reportFailure(log, harness, canonical, loop, result);
     return 0;
   });
 
+const runTriage = (
+  rest: ReadonlyArray<string>,
+  stdin: () => Effect.Effect<string, string>,
+): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    if (rest[0] === "review") return yield* runTriageReview(rest);
+    if (rest[0] !== "failure") {
+      yield* Effect.sync(() => {
+        console.error(
+          "usage: jev triage failure [--text FILE|-] [--transcript FILE] | jev triage review --input findings.json",
+        );
+      });
+      return 1;
+    }
+    return yield* runTriageFailure(rest, stdin);
+  });
 const isEntrypoint = Option.fromUndefinedOr(process.argv[1]).pipe(
   Option.exists((entry) => realpathSync(entry) === fileURLToPath(import.meta.url)),
 );

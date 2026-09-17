@@ -178,46 +178,86 @@ export function extractOpencode(
   });
 }
 
+const claudeMessages = (
+  sessionID: string,
+  raw: string,
+  sinceIso: string,
+): ReadonlyArray<RawMessage> => {
+  const messages: Array<RawMessage> = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const decoded = decodeClaudeEntry(line);
+    if (Option.isNone(decoded)) continue;
+    const entry = decoded.value;
+    const message = Option.fromUndefinedOr(entry.message);
+    if (entry.type !== "assistant" || Option.isNone(message)) continue;
+    const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
+      Option.map((timestamp) => timestamp < sinceIso),
+      Option.getOrElse(() => false),
+    );
+    if (tooOld) continue;
+    messages.push(
+      ...Option.toArray(
+        messageFromText(
+          "claude-code",
+          sessionID,
+          "assistant_message",
+          textOf(message.value.content),
+        ),
+      ),
+    );
+  }
+  return messages;
+};
+
 export function extractClaude(
   root: string,
   sinceIso: string,
 ): Effect.Effect<ReadonlyArray<RawMessage>, AuditError> {
   return Effect.tryPromise({
     try: async () => {
-      const files = await listJsonl(root);
       const messages: Array<RawMessage> = [];
-      for (const file of files) {
-        const sessionID = basename(file, ".jsonl");
+      for (const file of await listJsonl(root)) {
         const raw = await readFile(file, "utf8");
-        for (const line of raw.split("\n")) {
-          if (line.trim().length === 0) continue;
-          const decoded = decodeClaudeEntry(line);
-          if (Option.isNone(decoded)) continue;
-          const entry = decoded.value;
-          const message = Option.fromUndefinedOr(entry.message);
-          if (entry.type !== "assistant" || Option.isNone(message)) continue;
-          const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
-            Option.map((timestamp) => timestamp < sinceIso),
-            Option.getOrElse(() => false),
-          );
-          if (tooOld) continue;
-          messages.push(
-            ...Option.toArray(
-              messageFromText(
-                "claude-code",
-                sessionID,
-                "assistant_message",
-                textOf(message.value.content),
-              ),
-            ),
-          );
-        }
+        messages.push(...claudeMessages(basename(file, ".jsonl"), raw, sinceIso));
       }
       return messages;
     },
     catch: () => new AuditError({ source: "claude-code" }),
   });
 }
+
+const piOmpMessages = (
+  harness: "pi" | "omp",
+  file: string,
+  raw: string,
+  sinceIso: string,
+): ReadonlyArray<RawMessage> => {
+  const messages: Array<RawMessage> = [];
+  let sessionID = basename(file, ".jsonl");
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const decoded = decodePiEntry(line);
+    if (Option.isNone(decoded)) continue;
+    const entry = decoded.value;
+    const session = Option.fromUndefinedOr(entry.id);
+    if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
+    const message = Option.fromUndefinedOr(entry.message);
+    if (entry.type !== "message" || Option.isNone(message)) continue;
+    if (message.value.role !== "assistant") continue;
+    const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
+      Option.map((timestamp) => timestamp < sinceIso),
+      Option.getOrElse(() => false),
+    );
+    if (tooOld) continue;
+    messages.push(
+      ...Option.toArray(
+        messageFromText(harness, sessionID, "assistant_message", textOf(message.value.content)),
+      ),
+    );
+  }
+  return messages;
+};
 
 export function extractPiOmp(
   roots: ReadonlyArray<PiOmpRoot>,
@@ -243,33 +283,7 @@ export function extractPiOmp(
           Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
           Effect.mapError(() => new AuditError({ source: harness })),
         );
-        let sessionID = basename(file, ".jsonl");
-        for (const line of raw.split("\n")) {
-          if (line.trim().length === 0) continue;
-          const decoded = decodePiEntry(line);
-          if (Option.isNone(decoded)) continue;
-          const entry = decoded.value;
-          const session = Option.fromUndefinedOr(entry.id);
-          if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
-          const message = Option.fromUndefinedOr(entry.message);
-          if (entry.type !== "message" || Option.isNone(message)) continue;
-          if (message.value.role !== "assistant") continue;
-          const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
-            Option.map((timestamp) => timestamp < sinceIso),
-            Option.getOrElse(() => false),
-          );
-          if (tooOld) continue;
-          messages.push(
-            ...Option.toArray(
-              messageFromText(
-                harness,
-                sessionID,
-                "assistant_message",
-                textOf(message.value.content),
-              ),
-            ),
-          );
-        }
+        messages.push(...piOmpMessages(harness, file, raw, sinceIso));
       }
     }
     return messages;

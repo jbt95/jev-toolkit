@@ -131,6 +131,28 @@ const inUnitInterval = (value: number): boolean => value >= 0 && value <= 1;
 const probabilitiesInRange = (probabilities: Readonly<Record<string, number>>): boolean =>
   Object.values(probabilities).every(inUnitInterval);
 
+type ChoiceQuestion = Extract<Question, { readonly _tag: "choice" }>;
+type ScoreQuestion = Extract<Question, { readonly _tag: "score" }>;
+
+const noulMatches = (answer: Answer): boolean =>
+  answer._tag === "noul" && inUnitInterval(answer.noul);
+
+const choiceMatches = (question: ChoiceQuestion, answer: Answer): boolean =>
+  answer._tag === "choice" &&
+  inUnitInterval(answer.confidence) &&
+  Object.hasOwn(question.criteria, answer.choice) &&
+  probabilitiesInRange(answer.probabilities);
+
+const scoreMatches = (question: ScoreQuestion, answer: Answer): boolean => {
+  if (answer._tag !== "score") return false;
+  if (!inUnitInterval(answer.confidence)) return false;
+  if (!Number.isFinite(answer.score) || answer.score < 0) return false;
+  const maxScore = question.criteria.length - 1;
+  if (maxScore >= 0 && answer.score > maxScore) return false;
+  const probabilities = Option.fromUndefinedOr(answer.probabilities);
+  return Option.isNone(probabilities) || probabilitiesInRange(probabilities.value);
+};
+
 /**
  * Schema validation only proves shape; a response is trustworthy only when
  * every requested question is answered with its own primitive, a choice from
@@ -139,25 +161,11 @@ const probabilitiesInRange = (probabilities: Readonly<Record<string, number>>): 
 const answerMatchesQuestion = (question: Question, answer: Answer): boolean => {
   switch (question._tag) {
     case "noul":
-      return answer._tag === "noul" && inUnitInterval(answer.noul);
+      return noulMatches(answer);
     case "choice":
-      return (
-        answer._tag === "choice" &&
-        inUnitInterval(answer.confidence) &&
-        Object.hasOwn(question.criteria, answer.choice) &&
-        probabilitiesInRange(answer.probabilities)
-      );
-    case "score": {
-      const maxScore = question.criteria.length - 1;
-      return (
-        answer._tag === "score" &&
-        inUnitInterval(answer.confidence) &&
-        Number.isFinite(answer.score) &&
-        answer.score >= 0 &&
-        (maxScore < 0 || answer.score <= maxScore) &&
-        (answer.probabilities === undefined || probabilitiesInRange(answer.probabilities))
-      );
-    }
+      return choiceMatches(question, answer);
+    case "score":
+      return scoreMatches(question, answer);
   }
 };
 

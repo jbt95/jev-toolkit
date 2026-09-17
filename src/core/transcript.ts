@@ -44,6 +44,21 @@ const itemText = (item: { readonly content?: unknown }): string => {
 const MAX_CANDIDATES = 5;
 const MAX_LINES = 40;
 
+const transcriptFailureTexts = (line: string): ReadonlyArray<string> => {
+  const decoded = decodeEntry(line);
+  if (Option.isNone(decoded)) return [];
+  const content = decoded.value.message?.content ?? [];
+  return content
+    .filter((item) => item.is_error === true)
+    .map((item) => itemText(item).trim())
+    .filter((text) => text.length > 0);
+};
+
+const fallbackFailureText = (line: string): Option.Option<string> =>
+  line.includes('"is_error":true') || line.includes('"is_error": true')
+    ? Option.some(line)
+    : Option.none();
+
 export function transcriptFailureCandidates(raw: string): ReadonlyArray<string> {
   const candidates: Array<string> = [];
   const lines = raw
@@ -52,20 +67,17 @@ export function transcriptFailureCandidates(raw: string): ReadonlyArray<string> 
     .slice(-MAX_LINES)
     .reverse();
   for (const line of lines) {
-    const decoded = decodeEntry(line);
-    if (Option.isNone(decoded)) continue;
-    const content = decoded.value.message?.content ?? [];
-    for (const item of content) {
-      if (item.is_error !== true) continue;
-      const text = itemText(item).trim();
-      if (text.length > 0 && !candidates.includes(text)) candidates.push(text);
+    for (const text of transcriptFailureTexts(line)) {
+      if (candidates.includes(text)) continue;
+      candidates.push(text);
       if (candidates.length >= MAX_CANDIDATES) return candidates;
     }
   }
   if (candidates.length > 0) return candidates;
   // Fallback for transcript shapes the decoder does not recognize.
   for (const line of lines) {
-    if (line.includes('"is_error":true') || line.includes('"is_error": true')) return [line];
+    const fallback = fallbackFailureText(line);
+    if (Option.isSome(fallback)) return [fallback.value];
   }
   return [];
 }

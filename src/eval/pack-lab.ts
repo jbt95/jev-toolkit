@@ -209,9 +209,13 @@ const runCase = (
 const mean = (values: ReadonlyArray<number>): number =>
   values.reduce((total, value) => total + value, 0) / values.length;
 
-const summarizeCase = (testCase: EvalCase, runs: ReadonlyArray<RunResult>): CaseReport => {
-  const first = runs[0];
-  const summary = first?.summary ?? {};
+interface AnswerStats {
+  readonly maxSpread: number;
+  readonly unstableAnswers: ReadonlyArray<string>;
+  readonly meanConfidence?: number;
+}
+
+const answerStats = (runs: ReadonlyArray<RunResult>): AnswerStats => {
   const numericByAnswer = new Map<string, Array<number>>();
   const confidences: Array<number> = [];
   for (const run of runs) {
@@ -237,6 +241,17 @@ const summarizeCase = (testCase: EvalCase, runs: ReadonlyArray<RunResult>): Case
     if (spread > 0.01) unstableAnswers.push(id);
     maxSpread = Math.max(maxSpread, spread);
   }
+  return {
+    maxSpread,
+    unstableAnswers,
+    meanConfidence: confidences.length === 0 ? undefined : mean(confidences),
+  };
+};
+
+const summarizeCase = (testCase: EvalCase, runs: ReadonlyArray<RunResult>): CaseReport => {
+  const first = runs[0];
+  const summary = first?.summary ?? {};
+  const stats = answerStats(runs);
   const expected = Option.getOrUndefined(Option.fromUndefinedOr(testCase.expected));
   const agreed =
     expected === undefined
@@ -247,9 +262,9 @@ const summarizeCase = (testCase: EvalCase, runs: ReadonlyArray<RunResult>): Case
     summary,
     expected,
     agreed,
-    meanConfidence: confidences.length === 0 ? undefined : mean(confidences),
-    maxSpread,
-    unstableAnswers,
+    meanConfidence: stats.meanConfidence,
+    maxSpread: stats.maxSpread,
+    unstableAnswers: stats.unstableAnswers,
     inputTokens: runs.reduce((total, run) => total + run.inputTokens, 0),
     outputTokens: runs.reduce((total, run) => total + run.outputTokens, 0),
     latencyMs: Math.round(mean(runs.map((run) => run.latencyMs))),

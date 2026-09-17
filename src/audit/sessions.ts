@@ -35,6 +35,66 @@ export interface PiOmpRoot {
 const isString = Predicate.isString;
 const prompt = (text: string): string => clip(stripFencedCode(redact(text))).slice(0, 300);
 
+/** Per-session digest state, shared by every harness reader. */
+interface DigestDraft {
+  userPrompts: Array<string>;
+  toolCounts: Record<string, number>;
+  assistantTurns: number;
+  errorCount: number;
+  startedAt: string;
+}
+
+const newDraft = (): DigestDraft => ({
+  userPrompts: [],
+  toolCounts: {},
+  assistantTurns: 0,
+  errorCount: 0,
+  startedAt: "",
+});
+
+const recordPrompt = (draft: DigestDraft, text: string): void => {
+  if (draft.userPrompts.length >= 3 || text.trim().length === 0) return;
+  draft.userPrompts.push(prompt(text));
+};
+
+const recordStartedAt = (draft: DigestDraft, timestamp: string | undefined): void => {
+  if (draft.startedAt !== "") return;
+  const seen = Option.fromUndefinedOr(timestamp);
+  if (Option.isSome(seen)) draft.startedAt = seen.value;
+};
+
+const isTooOld = (timestamp: string | undefined, sinceIso: string): boolean =>
+  Option.fromUndefinedOr(timestamp).pipe(
+    Option.map((value) => value < sinceIso),
+    Option.getOrElse(() => false),
+  );
+
+const draftDigest = (
+  harness: Harness,
+  sessionID: string,
+  draft: DigestDraft,
+  costUsd?: number,
+): Option.Option<SessionDigest> => {
+  if (draft.assistantTurns === 0 && draft.userPrompts.length === 0) return Option.none();
+  const base: SessionDigest = {
+    harness,
+    sessionID,
+    startedAt: draft.startedAt,
+    userPrompts: draft.userPrompts,
+    assistantTurns: draft.assistantTurns,
+    toolCounts: draft.toolCounts,
+    errorCount: draft.errorCount,
+  };
+  return Option.some(
+    Option.fromUndefinedOr(costUsd).pipe(
+      Option.match({
+        onNone: () => base,
+        onSome: (cost) => ({ ...base, costUsd: cost }),
+      }),
+    ),
+  );
+};
+
 const ContentItem = Schema.Struct({
   type: Schema.String,
   text: Schema.optional(Schema.String),
@@ -83,7 +143,40 @@ const ClaudeEntry = Schema.Struct({
     }),
   ),
 });
+type ClaudeEntry = Schema.Schema.Type<typeof ClaudeEntry>;
+type ClaudeContent = string | ReadonlyArray<Schema.Schema.Type<typeof ContentItem>>;
 const decodeClaude = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudeEntry));
+
+const accumulateClaudeUser = (draft: DigestDraft, content: ClaudeContent): void => {
+  if (isString(content)) {
+    recordPrompt(draft, content);
+    return;
+  }
+  for (const item of content) {
+    if (item.is_error === true) draft.errorCount += 1;
+  }
+  recordPrompt(draft, textOf(content));
+};
+
+const accumulateClaude = (draft: DigestDraft, entry: ClaudeEntry, sinceIso: string): void => {
+  recordStartedAt(draft, entry.timestamp);
+  if (isTooOld(entry.timestamp, sinceIso)) return;
+  const message = Option.fromUndefinedOr(entry.message);
+  if (Option.isNone(message)) return;
+  const content = message.value.content;
+  if (entry.type === "assistant") {
+    draft.assistantTurns += 1;
+    if (!isString(content)) countTools(content, draft.toolCounts, "tool_use");
+    if (!isString(content)) {
+      for (const item of content) {
+        if (item.is_error === true) draft.errorCount += 1;
+      }
+    }
+    return;
+  }
+  if (entry.type !== "user") return;
+  accumulateClaudeUser(draft, content);
+};
 
 export function digestClaude(
   root: string,
@@ -94,60 +187,15 @@ export function digestClaude(
       const digests: Array<SessionDigest> = [];
       for (const file of await listJsonl(root)) {
         const raw = await readFile(file, "utf8");
-        const userPrompts: Array<string> = [];
-        const toolCounts: Record<string, number> = {};
-        let assistantTurns = 0;
-        let errorCount = 0;
-        let startedAt = "";
+        const draft = newDraft();
         for (const line of raw.split("\n")) {
           if (line.trim().length === 0) continue;
           const decoded = decodeClaude(line);
           if (Option.isNone(decoded)) continue;
-          const entry = decoded.value;
-          const firstSeen = Option.fromUndefinedOr(entry.timestamp);
-          if (startedAt === "" && Option.isSome(firstSeen)) startedAt = firstSeen.value;
-          const tooOld = Option.map(firstSeen, (timestamp) => timestamp < sinceIso).pipe(
-            Option.getOrElse(() => false),
-          );
-          if (tooOld) continue;
-          const message = Option.fromUndefinedOr(entry.message);
-          if (Option.isNone(message)) continue;
-          const content = message.value.content;
-          if (entry.type === "assistant") {
-            assistantTurns += 1;
-            if (!isString(content)) {
-              countTools(content, toolCounts, "tool_use");
-              for (const item of content) {
-                if (item.is_error === true) errorCount += 1;
-              }
-            }
-            continue;
-          }
-          if (entry.type !== "user") continue;
-          if (isString(content)) {
-            if (userPrompts.length < 3 && content.trim().length > 0) {
-              userPrompts.push(prompt(content));
-            }
-            continue;
-          }
-          let toolErrors = 0;
-          for (const item of content) {
-            if (item.is_error === true) toolErrors += 1;
-          }
-          errorCount += toolErrors;
-          const text = textOf(content);
-          if (userPrompts.length < 3 && text.trim().length > 0) userPrompts.push(prompt(text));
+          accumulateClaude(draft, decoded.value, sinceIso);
         }
-        if (assistantTurns === 0 && userPrompts.length === 0) continue;
-        digests.push({
-          harness: "claude-code",
-          sessionID: basename(file, ".jsonl"),
-          startedAt,
-          userPrompts,
-          assistantTurns,
-          toolCounts,
-          errorCount,
-        });
+        const digest = draftDigest("claude-code", basename(file, ".jsonl"), draft);
+        if (Option.isSome(digest)) digests.push(digest.value);
       }
       return digests;
     },
@@ -160,6 +208,7 @@ const OpencodeSessionRow = Schema.Struct({
   time_created: Schema.Number,
   cost: Schema.optional(Schema.Number),
 });
+type OpencodeSessionRow = Schema.Schema.Type<typeof OpencodeSessionRow>;
 const decodeSessionRow = Schema.decodeUnknownOption(OpencodeSessionRow);
 
 const OpencodeUser = Schema.Struct({ text: Schema.optional(Schema.String) });
@@ -168,6 +217,45 @@ const decodeOpencodeUser = Schema.decodeUnknownOption(Schema.fromJsonString(Open
 const decodeOpencodeAssistant = Schema.decodeUnknownOption(
   Schema.fromJsonString(OpencodeAssistant),
 );
+
+const accumulateOpencodeUser = (draft: DigestDraft, data: string): void => {
+  const decoded = decodeOpencodeUser(data);
+  const text = Option.flatMap(decoded, (user) => Option.fromUndefinedOr(user.text));
+  if (Option.isSome(text)) recordPrompt(draft, text.value);
+};
+
+const accumulateOpencodeAssistant = (draft: DigestDraft, data: string): void => {
+  const decoded = decodeOpencodeAssistant(data);
+  if (Option.isNone(decoded)) return;
+  draft.assistantTurns += 1;
+  countTools(decoded.value.content, draft.toolCounts, "tool");
+  for (const item of decoded.value.content) {
+    if (item.type === "tool" && item.state?.status === "error") draft.errorCount += 1;
+  }
+};
+
+const digestOpencodeSession = (
+  db: DatabaseSync,
+  session: OpencodeSessionRow,
+): Option.Option<SessionDigest> => {
+  const draft = newDraft();
+  const messages = db
+    .prepare("SELECT type, data FROM session_message WHERE session_id = ?")
+    .all(session.id);
+  for (const message of messages) {
+    const messageType = message["type"];
+    const data = message["data"];
+    if (!isString(data)) continue;
+    if (messageType === "user") {
+      accumulateOpencodeUser(draft, data);
+      continue;
+    }
+    if (messageType !== "assistant") continue;
+    accumulateOpencodeAssistant(draft, data);
+  }
+  draft.startedAt = new Date(session.time_created).toISOString();
+  return draftDigest("opencode2", session.id, draft, session.cost);
+};
 
 export function digestOpencode(
   dbPath: string,
@@ -186,55 +274,8 @@ export function digestOpencode(
         for (const row of rows) {
           const decodedRow = decodeSessionRow(row);
           if (Option.isNone(decodedRow)) continue;
-          const { id, time_created, cost } = decodedRow.value;
-          const messages = db
-            .prepare("SELECT type, data FROM session_message WHERE session_id = ?")
-            .all(id);
-          const userPrompts: Array<string> = [];
-          const toolCounts: Record<string, number> = {};
-          let assistantTurns = 0;
-          let errorCount = 0;
-          for (const message of messages) {
-            const messageType = message["type"];
-            const data = message["data"];
-            if (!isString(data)) continue;
-            if (messageType === "user") {
-              const decoded = decodeOpencodeUser(data);
-              const text = Option.flatMap(decoded, (user) => Option.fromUndefinedOr(user.text));
-              if (Option.isSome(text)) {
-                if (userPrompts.length < 3 && text.value.trim().length > 0) {
-                  userPrompts.push(prompt(text.value));
-                }
-              }
-              continue;
-            }
-            if (messageType !== "assistant") continue;
-            const decoded = decodeOpencodeAssistant(data);
-            if (Option.isNone(decoded)) continue;
-            assistantTurns += 1;
-            countTools(decoded.value.content, toolCounts, "tool");
-            for (const item of decoded.value.content) {
-              if (item.type === "tool" && item.state?.status === "error") errorCount += 1;
-            }
-          }
-          if (assistantTurns === 0 && userPrompts.length === 0) continue;
-          const digest: SessionDigest = {
-            harness: "opencode2",
-            sessionID: id,
-            startedAt: new Date(time_created).toISOString(),
-            userPrompts,
-            assistantTurns,
-            toolCounts,
-            errorCount,
-          };
-          digests.push(
-            Option.fromUndefinedOr(cost).pipe(
-              Option.match({
-                onNone: () => digest,
-                onSome: (costUsd) => ({ ...digest, costUsd }),
-              }),
-            ),
-          );
+          const digest = digestOpencodeSession(db, decodedRow.value);
+          if (Option.isSome(digest)) digests.push(digest.value);
         }
         return digests;
       } finally {
@@ -256,7 +297,45 @@ const PiEntry = Schema.Struct({
     }),
   ),
 });
+type PiEntry = Schema.Schema.Type<typeof PiEntry>;
 const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
+
+const accumulatePi = (draft: DigestDraft, entry: PiEntry, sinceIso: string): void => {
+  recordStartedAt(draft, entry.timestamp);
+  if (isTooOld(entry.timestamp, sinceIso)) return;
+  const message = Option.fromUndefinedOr(entry.message);
+  if (entry.type !== "message" || Option.isNone(message)) return;
+  if (message.value.role === "assistant") {
+    draft.assistantTurns += 1;
+    countTools(message.value.content, draft.toolCounts, "toolCall");
+    for (const item of message.value.content) {
+      if (item.is_error === true) draft.errorCount += 1;
+    }
+    return;
+  }
+  if (message.value.role !== "user") return;
+  recordPrompt(draft, textOf(message.value.content));
+};
+
+const digestPiOmpText = (
+  harness: "pi" | "omp",
+  file: string,
+  raw: string,
+  sinceIso: string,
+): Option.Option<SessionDigest> => {
+  const draft = newDraft();
+  let sessionID = basename(file, ".jsonl");
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const decoded = decodePiEntry(line);
+    if (Option.isNone(decoded)) continue;
+    const entry = decoded.value;
+    const session = Option.fromUndefinedOr(entry.id);
+    if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
+    accumulatePi(draft, entry, sinceIso);
+  }
+  return draftDigest(harness, sessionID, draft);
+};
 
 export function digestPiOmp(
   roots: ReadonlyArray<PiOmpRoot>,
@@ -282,49 +361,8 @@ export function digestPiOmp(
           Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
           Effect.mapError(() => new SessionAuditError({ source: harness })),
         );
-        const userPrompts: Array<string> = [];
-        const toolCounts: Record<string, number> = {};
-        let sessionID = basename(file, ".jsonl");
-        let startedAt = "";
-        let assistantTurns = 0;
-        let errorCount = 0;
-        for (const line of raw.split("\n")) {
-          if (line.trim().length === 0) continue;
-          const decoded = decodePiEntry(line);
-          if (Option.isNone(decoded)) continue;
-          const entry = decoded.value;
-          const session = Option.fromUndefinedOr(entry.id);
-          if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
-          const firstSeen = Option.fromUndefinedOr(entry.timestamp);
-          if (startedAt === "" && Option.isSome(firstSeen)) startedAt = firstSeen.value;
-          const tooOld = Option.map(firstSeen, (timestamp) => timestamp < sinceIso).pipe(
-            Option.getOrElse(() => false),
-          );
-          if (tooOld) continue;
-          const message = Option.fromUndefinedOr(entry.message);
-          if (Option.isNone(message)) continue;
-          if (message.value.role === "assistant") {
-            assistantTurns += 1;
-            countTools(message.value.content, toolCounts, "toolCall");
-            for (const item of message.value.content) {
-              if (item.is_error === true) errorCount += 1;
-            }
-            continue;
-          }
-          if (message.value.role !== "user") continue;
-          const text = textOf(message.value.content);
-          if (userPrompts.length < 3 && text.trim().length > 0) userPrompts.push(prompt(text));
-        }
-        if (assistantTurns === 0 && userPrompts.length === 0) continue;
-        digests.push({
-          harness,
-          sessionID,
-          startedAt,
-          userPrompts,
-          assistantTurns,
-          toolCounts,
-          errorCount,
-        });
+        const digest = digestPiOmpText(harness, file, raw, sinceIso);
+        if (Option.isSome(digest)) digests.push(digest.value);
       }
     }
     return digests;

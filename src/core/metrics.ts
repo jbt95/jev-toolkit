@@ -3,7 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService } from "./events.ts";
-import type { JevEvent, SessionLabelEvent } from "./schema.ts";
+import type {
+  CallEvent,
+  JevEvent,
+  OpportunityEvent,
+  ReviewEvent,
+  SessionLabelEvent,
+} from "./schema.ts";
 
 export class MeterError extends Data.TaggedError("MeterError")<{}> {}
 
@@ -79,115 +85,175 @@ const splitKey = (key: string): readonly [string, string] => {
   return separator < 0 ? [key, ""] : [key.slice(0, separator), key.slice(separator + 1)];
 };
 
+/** One accumulator per event kind; collect() only dispatches and finalizes. */
+interface EventAccumulator {
+  readonly calls: Map<string, { ok: number; error: number }>;
+  readonly tokens: Map<string, { input: number; output: number }>;
+  readonly opportunities: Map<string, { matched: number; missed: number }>;
+  readonly sessions: Map<string, Set<string>>;
+  readonly labeledSessions: Map<string, Set<string>>;
+  readonly triage: Map<string, number>;
+  readonly latency: Map<string, Histogram>;
+  readonly confidence: Map<string, Histogram>;
+  readonly sessionOutcomes: Map<string, number>;
+  readonly sessionWaste: Map<string, number>;
+  readonly sessionFriction: Map<string, Histogram>;
+  readonly reviews: Map<string, number>;
+  readonly reviewScores: Map<string, { sum: number; count: number }>;
+  readonly reviewDirections: Map<string, number>;
+  readonly latestLabel: Map<string, SessionLabelEvent>;
+  readonly anonymousLabels: Array<SessionLabelEvent>;
+}
+
+const newAccumulator = (): EventAccumulator => ({
+  calls: new Map(),
+  tokens: new Map(),
+  opportunities: new Map(),
+  sessions: new Map(),
+  labeledSessions: new Map(),
+  triage: new Map(),
+  latency: new Map(),
+  confidence: new Map(),
+  sessionOutcomes: new Map(),
+  sessionWaste: new Map(),
+  sessionFriction: new Map(),
+  reviews: new Map(),
+  reviewScores: new Map(),
+  reviewDirections: new Map(),
+  latestLabel: new Map(),
+  anonymousLabels: [],
+});
+
+const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
+  const entry = acc.calls.get(event.harness) ?? { ok: 0, error: 0 };
+  if (event.status === "ok") entry.ok += 1;
+  else entry.error += 1;
+  acc.calls.set(event.harness, entry);
+
+  const eventTokens = Option.fromUndefinedOr(event.tokens);
+  if (Option.isSome(eventTokens)) {
+    const tokenEntry = acc.tokens.get(event.harness) ?? { input: 0, output: 0 };
+    tokenEntry.input += eventTokens.value.input;
+    tokenEntry.output += eventTokens.value.output;
+    acc.tokens.set(event.harness, tokenEntry);
+  }
+
+  const eventSession = Option.fromUndefinedOr(event.sessionID);
+  if (Option.isSome(eventSession)) {
+    const set = acc.sessions.get(event.harness) ?? new Set<string>();
+    set.add(eventSession.value);
+    acc.sessions.set(event.harness, set);
+  }
+
+  const latencyHistogram = acc.latency.get(event.harness) ?? newHistogram(LATENCY_BUCKETS);
+  observe(latencyHistogram, LATENCY_BUCKETS, event.latencyMs / 1000);
+  acc.latency.set(event.harness, latencyHistogram);
+
+  const eventAnswers = Option.fromUndefinedOr(event.answers);
+  if (Option.isSome(eventAnswers)) {
+    for (const answer of Object.values(eventAnswers.value)) {
+      if (answer._tag === "noul") continue;
+      const histogram = acc.confidence.get(answer._tag) ?? newHistogram(CONFIDENCE_BUCKETS);
+      observe(histogram, CONFIDENCE_BUCKETS, answer.confidence);
+      acc.confidence.set(answer._tag, histogram);
+    }
+  }
+};
+
+const collectOpportunity = (acc: EventAccumulator, event: OpportunityEvent): void => {
+  const key = `${event.harness}|${event.source}`;
+  const entry = acc.opportunities.get(key) ?? { matched: 0, missed: 0 };
+  if (event.matched) entry.matched += 1;
+  else entry.missed += 1;
+  acc.opportunities.set(key, entry);
+};
+
+const collectReview = (acc: EventAccumulator, event: ReviewEvent): void => {
+  acc.reviews.set(event.harness, (acc.reviews.get(event.harness) ?? 0) + 1);
+  for (const [dimension, result] of Object.entries(event.dimensions)) {
+    const score = Option.fromUndefinedOr(result.score);
+    if (!result.applicable || Option.isNone(score)) continue;
+    const key = `${event.harness}|${dimension}`;
+    const entry = acc.reviewScores.get(key) ?? { sum: 0, count: 0 };
+    entry.sum += score.value;
+    entry.count += 1;
+    acc.reviewScores.set(key, entry);
+    const direction = Option.fromUndefinedOr(result.direction);
+    if (Option.isSome(direction)) {
+      const directionKey = `${event.harness}|${direction.value}`;
+      acc.reviewDirections.set(directionKey, (acc.reviewDirections.get(directionKey) ?? 0) + 1);
+    }
+  }
+};
+
+const collectSessionLabel = (acc: EventAccumulator, event: SessionLabelEvent): void => {
+  const labeledSession = Option.fromUndefinedOr(event.sessionID);
+  if (Option.isSome(labeledSession)) {
+    const set = acc.labeledSessions.get(event.harness) ?? new Set<string>();
+    set.add(labeledSession.value);
+    acc.labeledSessions.set(event.harness, set);
+    // Re-labeling overwrites: outcome/waste/friction follow the latest label.
+    acc.latestLabel.set(`${event.harness}|${labeledSession.value}`, event);
+  } else {
+    acc.anonymousLabels.push(event);
+  }
+};
+
+/** One observation per labeled session (latest label wins); labels without a
+ * session ID cannot be deduped and stay per-event. */
+const finalizeSessionLabels = (acc: EventAccumulator): void => {
+  for (const label of [...acc.latestLabel.values(), ...acc.anonymousLabels]) {
+    const outcomeKey = `${label.harness}|${label.outcome}`;
+    acc.sessionOutcomes.set(outcomeKey, (acc.sessionOutcomes.get(outcomeKey) ?? 0) + 1);
+    const wasteKey = `${label.harness}|${label.waste}`;
+    acc.sessionWaste.set(wasteKey, (acc.sessionWaste.get(wasteKey) ?? 0) + 1);
+    const frictionHistogram =
+      acc.sessionFriction.get(label.harness) ?? newHistogram(FRICTION_BUCKETS);
+    observe(frictionHistogram, FRICTION_BUCKETS, label.friction);
+    acc.sessionFriction.set(label.harness, frictionHistogram);
+  }
+};
+
 export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
-  const calls = new Map<string, { ok: number; error: number }>();
-  const tokens = new Map<string, { input: number; output: number }>();
-  const opportunities = new Map<string, { matched: number; missed: number }>();
-  const sessions = new Map<string, Set<string>>();
-  const labeledSessions = new Map<string, Set<string>>();
-  const triage = new Map<string, number>();
-  const latency = new Map<string, Histogram>();
-  const confidence = new Map<string, Histogram>();
-  const sessionOutcomes = new Map<string, number>();
-  const sessionWaste = new Map<string, number>();
-  const sessionFriction = new Map<string, Histogram>();
-  const reviews = new Map<string, number>();
-  const reviewScores = new Map<string, { sum: number; count: number }>();
-  const reviewDirections = new Map<string, number>();
-  const latestLabel = new Map<string, SessionLabelEvent>();
-  const anonymousLabels: Array<SessionLabelEvent> = [];
+  const acc = newAccumulator();
+  const {
+    calls,
+    tokens,
+    opportunities,
+    sessions,
+    labeledSessions,
+    triage,
+    latency,
+    confidence,
+    sessionOutcomes,
+    sessionWaste,
+    sessionFriction,
+    reviews,
+    reviewScores,
+    reviewDirections,
+  } = acc;
 
   for (const event of events) {
     switch (event._tag) {
-      case "call": {
-        const entry = calls.get(event.harness) ?? { ok: 0, error: 0 };
-        if (event.status === "ok") entry.ok += 1;
-        else entry.error += 1;
-        calls.set(event.harness, entry);
-        const eventTokens = Option.fromUndefinedOr(event.tokens);
-        if (Option.isSome(eventTokens)) {
-          const tokenEntry = tokens.get(event.harness) ?? { input: 0, output: 0 };
-          tokenEntry.input += eventTokens.value.input;
-          tokenEntry.output += eventTokens.value.output;
-          tokens.set(event.harness, tokenEntry);
-        }
-        const eventSession = Option.fromUndefinedOr(event.sessionID);
-        if (Option.isSome(eventSession)) {
-          const set = sessions.get(event.harness) ?? new Set<string>();
-          set.add(eventSession.value);
-          sessions.set(event.harness, set);
-        }
-        const latencyHistogram = latency.get(event.harness) ?? newHistogram(LATENCY_BUCKETS);
-        observe(latencyHistogram, LATENCY_BUCKETS, event.latencyMs / 1000);
-        latency.set(event.harness, latencyHistogram);
-        const eventAnswers = Option.fromUndefinedOr(event.answers);
-        if (Option.isSome(eventAnswers)) {
-          for (const answer of Object.values(eventAnswers.value)) {
-            if (answer._tag === "noul") continue;
-            const histogram = confidence.get(answer._tag) ?? newHistogram(CONFIDENCE_BUCKETS);
-            observe(histogram, CONFIDENCE_BUCKETS, answer.confidence);
-            confidence.set(answer._tag, histogram);
-          }
-        }
+      case "call":
+        collectCall(acc, event);
         break;
-      }
-      case "opportunity": {
-        const key = `${event.harness}|${event.source}`;
-        const entry = opportunities.get(key) ?? { matched: 0, missed: 0 };
-        if (event.matched) entry.matched += 1;
-        else entry.missed += 1;
-        opportunities.set(key, entry);
+      case "opportunity":
+        collectOpportunity(acc, event);
         break;
-      }
-      case "triage": {
+      case "triage":
         triage.set(event.feature, (triage.get(event.feature) ?? 0) + 1);
         break;
-      }
-      case "review": {
-        reviews.set(event.harness, (reviews.get(event.harness) ?? 0) + 1);
-        for (const [dimension, result] of Object.entries(event.dimensions)) {
-          const score = Option.fromUndefinedOr(result.score);
-          if (!result.applicable || Option.isNone(score)) continue;
-          const key = `${event.harness}|${dimension}`;
-          const entry = reviewScores.get(key) ?? { sum: 0, count: 0 };
-          entry.sum += score.value;
-          entry.count += 1;
-          reviewScores.set(key, entry);
-          const direction = Option.fromUndefinedOr(result.direction);
-          if (Option.isSome(direction)) {
-            const directionKey = `${event.harness}|${direction.value}`;
-            reviewDirections.set(directionKey, (reviewDirections.get(directionKey) ?? 0) + 1);
-          }
-        }
+      case "review":
+        collectReview(acc, event);
         break;
-      }
-      case "session_label": {
-        const labeledSession = Option.fromUndefinedOr(event.sessionID);
-        if (Option.isSome(labeledSession)) {
-          const set = labeledSessions.get(event.harness) ?? new Set<string>();
-          set.add(labeledSession.value);
-          labeledSessions.set(event.harness, set);
-          // Re-labeling overwrites: outcome/waste/friction follow the latest label.
-          latestLabel.set(`${event.harness}|${labeledSession.value}`, event);
-        } else {
-          anonymousLabels.push(event);
-        }
+      case "session_label":
+        collectSessionLabel(acc, event);
         break;
-      }
     }
   }
 
-  // One observation per labeled session (latest label wins); labels without a
-  // session ID cannot be deduped and stay per-event.
-  for (const label of [...latestLabel.values(), ...anonymousLabels]) {
-    const outcomeKey = `${label.harness}|${label.outcome}`;
-    sessionOutcomes.set(outcomeKey, (sessionOutcomes.get(outcomeKey) ?? 0) + 1);
-    const wasteKey = `${label.harness}|${label.waste}`;
-    sessionWaste.set(wasteKey, (sessionWaste.get(wasteKey) ?? 0) + 1);
-    const frictionHistogram = sessionFriction.get(label.harness) ?? newHistogram(FRICTION_BUCKETS);
-    observe(frictionHistogram, FRICTION_BUCKETS, label.friction);
-    sessionFriction.set(label.harness, frictionHistogram);
-  }
+  finalizeSessionLabels(acc);
 
   const families: Array<MetricFamily> = [
     {
