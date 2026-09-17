@@ -5,8 +5,8 @@ import { alignedIndexes, claimAlignmentQuestions } from "@/question-packs/claim-
 describe("claim alignment", () => {
   it("asks one noul per claim and references sessionQuestions", () => {
     const questions = claimAlignmentQuestions([
-      { id: "a0", matchedText: "likely" },
-      { id: "a1", matchedText: "rank" },
+      { id: "a0", excerpt: "likely" },
+      { id: "a1", excerpt: "rank" },
     ]);
     expect(Object.keys(questions)).toHaveLength(2);
     if (questions["a0"]?._tag === "noul") {

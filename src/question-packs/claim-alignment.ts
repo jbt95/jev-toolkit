@@ -10,7 +10,7 @@ export const ALIGN_THRESHOLD = 0.5;
 
 export interface AlignmentClaim {
   readonly id: string;
-  readonly matchedText: string;
+  readonly excerpt: string;
 }
 
 /** One noul per claim; state carries `sessionQuestions` and `claims`. */
@@ -20,7 +20,7 @@ export const claimAlignmentQuestions = (claims: ReadonlyArray<AlignmentClaim>): 
     questions[`a${index}`] = {
       _tag: "noul",
       instructions:
-        `Does at least one question in \`sessionQuestions\` address this claim: "${claim.matchedText}" ` +
+        `Does at least one question in \`sessionQuestions\` address this claim: "${claim.excerpt}" ` +
         `(found in claims[${index}])? Answer no when the session's questions were about something else.`,
     };
   });

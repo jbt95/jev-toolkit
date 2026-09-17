@@ -7,24 +7,58 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { matchQuantitativeClaim } from "../core/detector.ts";
-import { Harness } from "../core/schema.ts";
-import { clip, redact } from "../core/text.ts";
+import { Harness, type ClaimKind } from "../core/schema.ts";
+import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export class AuditError extends Data.TaggedError("AuditError")<{ readonly source: string }> {}
 
-export const RawOpportunity = Schema.Struct({
+/** One assistant message (or user prompt) reduced to the prose Jev may see. */
+export const RawMessage = Schema.Struct({
   harness: Harness,
   sessionID: Schema.String,
-  source: Schema.Literals(["assistant_message"]),
-  pattern: Schema.String,
-  matchedText: Schema.String,
-  context: Schema.String,
+  text: Schema.String,
 });
-export type RawOpportunity = Schema.Schema.Type<typeof RawOpportunity>;
+export type RawMessage = Schema.Schema.Type<typeof RawMessage>;
 
-export interface CorrelatedOpportunity extends RawOpportunity {
+export interface DetectedOpportunity {
+  readonly harness: RawMessage["harness"];
+  readonly sessionID: string;
+  readonly pattern: ClaimKind;
+  readonly excerpt: string;
+}
+
+/** An opportunity is matched when a session question actually addressed the claim. */
+export interface CorrelatedOpportunity extends DetectedOpportunity {
   readonly matched: boolean;
 }
+
+/**
+ * The regex is no longer the detector. It only quotes the span for a kind Jev
+ * already routed, falling back to a short excerpt when it cannot find one.
+ */
+export const toDetectedOpportunity = (
+  message: RawMessage,
+  kind: ClaimKind,
+): DetectedOpportunity => {
+  const span = matchQuantitativeClaim(message.text).find((match) => match.pattern === kind);
+  return {
+    harness: message.harness,
+    sessionID: message.sessionID,
+    pattern: kind,
+    excerpt: span?.matched ?? message.text.slice(0, 120),
+  };
+};
+
+const messageFromText = (
+  harness: RawMessage["harness"],
+  sessionID: string,
+  text: string,
+): RawMessage | undefined => {
+  const prose = stripFencedCode(text);
+  return prose.trim().length === 0
+    ? undefined
+    : { harness, sessionID, text: clip(redact(prose), 1000) };
+};
 
 export interface PiOmpRoot {
   readonly harness: "pi" | "omp";
@@ -52,27 +86,23 @@ const PiEntry = Schema.Struct({
 });
 const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
 
-const OpencodeMessage = Schema.Struct({ content: Schema.Array(ContentItem) });
-const decodeOpencodeMessage = Schema.decodeUnknownOption(Schema.fromJsonString(OpencodeMessage));
+const OpencodeContentMessage = Schema.Struct({ content: Schema.Array(ContentItem) });
+const OpencodeTextMessage = Schema.Struct({ text: Schema.String });
+const decodeOpencodeContent = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OpencodeContentMessage),
+);
+const decodeOpencodeText = Schema.decodeUnknownOption(Schema.fromJsonString(OpencodeTextMessage));
+
+/** Assistant rows carry `content` parts; user rows carry a top-level `text`. */
+const opencodeText = (data: string): string | undefined => {
+  const content = decodeOpencodeContent(data);
+  if (Option.isSome(content)) return textOf(content.value.content);
+  const plain = decodeOpencodeText(data);
+  return Option.isSome(plain) ? plain.value.text : undefined;
+};
 
 const OpencodeRow = Schema.Struct({ session_id: Schema.String, data: Schema.String });
 const decodeRow = Schema.decodeUnknownOption(OpencodeRow);
-
-const claimsFromText = (
-  harness: RawOpportunity["harness"],
-  sessionID: string,
-  text: string,
-): ReadonlyArray<RawOpportunity> => {
-  const context = clip(redact(text), 1000);
-  return matchQuantitativeClaim(text).map((match) => ({
-    harness,
-    sessionID,
-    source: "assistant_message",
-    pattern: match.pattern,
-    matchedText: match.matched,
-    context,
-  }));
-};
 
 const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
   const entries = await readdir(root, { recursive: true });
@@ -85,7 +115,8 @@ const textOf = (content: ReadonlyArray<{ readonly text?: string }>): string =>
 export function extractOpencode(
   dbPath: string,
   sinceIso: string,
-): Effect.Effect<ReadonlyArray<RawOpportunity>, AuditError> {
+  messageType: "assistant" | "user",
+): Effect.Effect<ReadonlyArray<RawMessage>, AuditError> {
   return Effect.try({
     try: () => {
       if (!existsSync(dbPath)) return [];
@@ -94,24 +125,19 @@ export function extractOpencode(
         const sinceMs = Date.parse(sinceIso);
         const rows = db
           .prepare(
-            "SELECT session_id, data FROM session_message WHERE type = 'assistant' AND time_created >= ?",
+            "SELECT session_id, data FROM session_message WHERE type = ? AND time_created >= ?",
           )
-          .all(sinceMs);
-        const opportunities: Array<RawOpportunity> = [];
+          .all(messageType, sinceMs);
+        const messages: Array<RawMessage> = [];
         for (const row of rows) {
           const decodedRow = decodeRow(row);
           if (Option.isNone(decodedRow)) continue;
-          const decoded = decodeOpencodeMessage(decodedRow.value.data);
-          if (Option.isNone(decoded)) continue;
-          opportunities.push(
-            ...claimsFromText(
-              "opencode2",
-              decodedRow.value.session_id,
-              textOf(decoded.value.content),
-            ),
-          );
+          const text = opencodeText(decodedRow.value.data);
+          if (text === undefined) continue;
+          const message = messageFromText("opencode2", decodedRow.value.session_id, text);
+          if (message !== undefined) messages.push(message);
         }
-        return opportunities;
+        return messages;
       } finally {
         db.close();
       }
@@ -123,11 +149,11 @@ export function extractOpencode(
 export function extractClaude(
   root: string,
   sinceIso: string,
-): Effect.Effect<ReadonlyArray<RawOpportunity>, AuditError> {
+): Effect.Effect<ReadonlyArray<RawMessage>, AuditError> {
   return Effect.tryPromise({
     try: async () => {
       const files = await listJsonl(root);
-      const opportunities: Array<RawOpportunity> = [];
+      const messages: Array<RawMessage> = [];
       for (const file of files) {
         const sessionID = basename(file, ".jsonl");
         const raw = await readFile(file, "utf8");
@@ -138,12 +164,11 @@ export function extractClaude(
           const entry = decoded.value;
           if (entry.type !== "assistant" || entry.message === undefined) continue;
           if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          opportunities.push(
-            ...claimsFromText("claude-code", sessionID, textOf(entry.message.content)),
-          );
+          const message = messageFromText("claude-code", sessionID, textOf(entry.message.content));
+          if (message !== undefined) messages.push(message);
         }
       }
-      return opportunities;
+      return messages;
     },
     catch: () => new AuditError({ source: "claude-code" }),
   });
@@ -152,9 +177,9 @@ export function extractClaude(
 export function extractPiOmp(
   roots: ReadonlyArray<PiOmpRoot>,
   sinceIso: string,
-): Effect.Effect<ReadonlyArray<RawOpportunity>, AuditError> {
+): Effect.Effect<ReadonlyArray<RawMessage>, AuditError> {
   return Effect.gen(function* () {
-    const opportunities: Array<RawOpportunity> = [];
+    const messages: Array<RawMessage> = [];
     for (const { harness, root } of roots) {
       const files = yield* Effect.tryPromise({
         try: () => listJsonl(root),
@@ -175,15 +200,11 @@ export function extractPiOmp(
           if (entry.type !== "message" || entry.message === undefined) continue;
           if (entry.message.role !== "assistant") continue;
           if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          opportunities.push(...claimsFromText(harness, sessionID, textOf(entry.message.content)));
+          const message = messageFromText(harness, sessionID, textOf(entry.message.content));
+          if (message !== undefined) messages.push(message);
         }
       }
     }
-    return opportunities;
+    return messages;
   });
-}
-
-/** An opportunity is matched when a session question actually addressed the claim. */
-export interface CorrelatedOpportunity extends RawOpportunity {
-  readonly matched: boolean;
 }

@@ -3,6 +3,10 @@ import * as Schema from "effect/Schema";
 export const Harness = Schema.Literals(["opencode2", "claude-code", "pi", "omp", "cli", "script"]);
 export type Harness = Schema.Schema.Type<typeof Harness>;
 
+/** Claim taxonomy shared by detection questions, opportunity events, and quoting. */
+export const CLAIM_KINDS = ["percent", "probability", "ranking", "estimate", "choice"] as const;
+export type ClaimKind = (typeof CLAIM_KINDS)[number];
+
 export const QuestionType = Schema.Literals(["choice", "noul", "score"]);
 export type QuestionType = Schema.Schema.Type<typeof QuestionType>;
 

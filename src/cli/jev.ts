@@ -12,8 +12,10 @@ import {
   extractClaude,
   extractOpencode,
   extractPiOmp,
+  toDetectedOpportunity,
   type CorrelatedOpportunity,
-  type RawOpportunity,
+  type DetectedOpportunity,
+  type RawMessage,
 } from "../audit/opportunities.ts";
 import {
   digestClaude,
@@ -47,7 +49,7 @@ import { clip, redact } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
-import { claimConfirmQuestions, confirmedIndexes } from "../question-packs/claim-confirmation.ts";
+import { claimDetectionQuestions, detectedClaims } from "../question-packs/claim-detection.ts";
 import {
   commitQuestions,
   verdictFor,
@@ -114,47 +116,73 @@ const parseSinceMs = (value: string): number => {
 
 const printAuditSummary = (
   input: {
-    readonly raw: ReadonlyArray<RawOpportunity>;
+    readonly messages: ReadonlyArray<RawMessage>;
     readonly correlated: ReadonlyArray<CorrelatedOpportunity>;
   },
   dryRun: boolean,
 ): void => {
-  const perHarness = new Map<string, { raw: number; confirmed: number; matched: number }>();
+  const perHarness = new Map<string, { messages: number; detected: number; matched: number }>();
   const entryFor = (harness: string) => {
-    const existing = perHarness.get(harness) ?? { raw: 0, confirmed: 0, matched: 0 };
+    const existing = perHarness.get(harness) ?? { messages: 0, detected: 0, matched: 0 };
     perHarness.set(harness, existing);
     return existing;
   };
-  for (const item of input.raw) entryFor(item.harness).raw += 1;
+  for (const item of input.messages) entryFor(item.harness).messages += 1;
   for (const item of input.correlated) {
     const entry = entryFor(item.harness);
-    entry.confirmed += 1;
+    entry.detected += 1;
     if (item.matched) entry.matched += 1;
   }
   console.log(
-    `harness        candidates confirmed matched missed compliance${dryRun ? " (dry run)" : ""}`,
+    `harness        messages detected matched missed compliance${dryRun ? " (dry run)" : ""}`,
   );
   const rows = [...perHarness.entries()].sort(([a], [b]) => a.localeCompare(b));
-  let rawTotal = 0;
-  let confirmedTotal = 0;
+  let messageTotal = 0;
+  let detectedTotal = 0;
   let matchedTotal = 0;
   for (const [harness, counts] of rows) {
-    rawTotal += counts.raw;
-    confirmedTotal += counts.confirmed;
+    messageTotal += counts.messages;
+    detectedTotal += counts.detected;
     matchedTotal += counts.matched;
-    const missed = counts.confirmed - counts.matched;
+    const missed = counts.detected - counts.matched;
     const compliance =
-      counts.confirmed === 0
-        ? "0.0%"
-        : `${((counts.matched / counts.confirmed) * 100).toFixed(1)}%`;
+      counts.detected === 0 ? "0.0%" : `${((counts.matched / counts.detected) * 100).toFixed(1)}%`;
     console.log(
-      `${harness.padEnd(15)}${String(counts.raw).padEnd(11)}${String(counts.confirmed).padEnd(10)}${String(counts.matched).padEnd(8)}${String(missed).padEnd(7)}${compliance}`,
+      `${harness.padEnd(15)}${String(counts.messages).padEnd(9)}${String(counts.detected).padEnd(10)}${String(counts.matched).padEnd(8)}${String(missed).padEnd(7)}${compliance}`,
     );
   }
-  const kept = rawTotal === 0 ? "0.0%" : `${((confirmedTotal / rawTotal) * 100).toFixed(1)}%`;
+  const rate =
+    messageTotal === 0 ? "0.0%" : `${((detectedTotal / messageTotal) * 100).toFixed(1)}%`;
   console.log(
-    `total: candidates=${rawTotal} confirmed=${confirmedTotal} matched=${matchedTotal} (regex kept ${kept})`,
+    `total: messages=${messageTotal} detected=${detectedTotal} matched=${matchedTotal} (detection rate ${rate})`,
   );
+};
+
+const printPromptSummary = (input: {
+  readonly prompts: number;
+  readonly regexTagged: number;
+  readonly detected: number;
+  readonly missed: number;
+  readonly missedExamples: ReadonlyArray<string>;
+  readonly detectedExamples: ReadonlyArray<string>;
+  readonly noiseExamples: ReadonlyArray<string>;
+}): void => {
+  const noise = input.regexTagged - (input.detected - input.missed);
+  console.log(
+    `prompts=${input.prompts} regex_tagged=${input.regexTagged} jev_detected=${input.detected} missed_by_regex=${input.missed} regex_noise=${noise}`,
+  );
+  if (input.missedExamples.length > 0) {
+    console.log("missed by regex (examples):");
+    for (const example of input.missedExamples) console.log(`  - ${example}`);
+  }
+  if (input.detectedExamples.length > 0) {
+    console.log("routed by Jev (examples):");
+    for (const example of input.detectedExamples) console.log(`  - ${example}`);
+  }
+  if (input.noiseExamples.length > 0) {
+    console.log("regex-tagged but not routed by Jev (examples):");
+    for (const example of input.noiseExamples) console.log(`  - ${example}`);
+  }
 };
 
 const execFileAsync = promisify(execFile);
@@ -240,17 +268,74 @@ export function runCli(
         return 0;
       }
       case "audit": {
+        const client = yield* JevClient;
+        const harness = harnessFromEnv("script");
+        if (rest[0] === "prompts") {
+          const sinceMs = parseSinceMs(flag(rest, "--since") ?? "7d");
+          const now = yield* Clock.currentTimeMillis;
+          const sinceIso = new Date(now - sinceMs).toISOString();
+          const messages = yield* extractOpencode(opencodeDbPath(), sinceIso, "user").pipe(
+            Effect.mapError((error) => `audit failed: ${error.source}`),
+          );
+          const regexTagged = messages.map(
+            (message) => matchQuantitativeClaim(message.text).length > 0,
+          );
+          const detectedIndexes = new Map<number, string>();
+          for (let start = 0; start < messages.length; start += 20) {
+            const batch = messages.slice(start, start + 20);
+            const result = yield* client
+              .ask({
+                harness,
+                state: {
+                  messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
+                },
+                questions: claimDetectionQuestions({
+                  count: batch.length,
+                  subject: "user_prompt",
+                }),
+              })
+              .pipe(Effect.mapError(describeJevError));
+            for (const found of detectedClaims(result.answers, batch.length)) {
+              detectedIndexes.set(start + found.index, found.kind);
+            }
+          }
+          const missed = [...detectedIndexes.keys()].filter((index) => regexTagged[index] !== true);
+          const noise = regexTagged.flatMap((tagged, index) =>
+            tagged && !detectedIndexes.has(index) ? [index] : [],
+          );
+          yield* Effect.sync(() => {
+            printPromptSummary({
+              prompts: messages.length,
+              regexTagged: regexTagged.filter(Boolean).length,
+              detected: detectedIndexes.size,
+              missed: missed.length,
+              missedExamples: missed.slice(0, 5).flatMap((index) => {
+                const message = messages[index];
+                return message === undefined ? [] : [message.text.slice(0, 100)];
+              }),
+              detectedExamples: [...detectedIndexes.entries()]
+                .slice(0, 5)
+                .flatMap(([index, kind]) => {
+                  const message = messages[index];
+                  return message === undefined ? [] : [`${kind}: ${message.text.slice(0, 90)}`];
+                }),
+              noiseExamples: noise.slice(0, 5).flatMap((index) => {
+                const message = messages[index];
+                return message === undefined ? [] : [message.text.slice(0, 100)];
+              }),
+            });
+          });
+          return 0;
+        }
         if (rest[0] !== "run") {
           yield* Effect.sync(() => {
             console.error(
-              "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run]",
+              "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run] | jev audit prompts [--since 7d]",
             );
           });
           return 1;
         }
         const log = yield* EventLog;
-        const client = yield* JevClient;
-        const harness = harnessFromEnv("script");
         const dryRun = rest.includes("--dry-run");
         const harnessFlag = flag(rest, "--harness") ?? "all";
         const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
@@ -259,16 +344,16 @@ export function runCli(
         const wants = (harness: string): boolean =>
           harnessFlag === "all" || harnessFlag === harness;
 
-        const opportunities: Array<RawOpportunity> = [];
+        const messages: Array<RawMessage> = [];
         if (wants("opencode2")) {
-          opportunities.push(
-            ...(yield* extractOpencode(opencodeDbPath(), sinceIso).pipe(
+          messages.push(
+            ...(yield* extractOpencode(opencodeDbPath(), sinceIso, "assistant").pipe(
               Effect.mapError((error) => `audit failed: ${error.source}`),
             )),
           );
         }
         if (wants("claude-code")) {
-          opportunities.push(
+          messages.push(
             ...(yield* extractClaude(claudeProjectsDir(), sinceIso).pipe(
               Effect.mapError((error) => `audit failed: ${error.source}`),
             )),
@@ -279,41 +364,36 @@ export function runCli(
           { harness: "omp" as const, root: ompSessionsDir() },
         ].filter((entry) => wants(entry.harness));
         if (piOmpRoots.length > 0) {
-          opportunities.push(
+          messages.push(
             ...(yield* extractPiOmp(piOmpRoots, sinceIso).pipe(
               Effect.mapError((error) => `audit failed: ${error.source}`),
             )),
           );
         }
 
-        // Stage 1: confirm regex candidates with Jev (batches of 20).
-        const confirmed: Array<RawOpportunity> = [];
-        for (let start = 0; start < opportunities.length; start += 20) {
-          const batch = opportunities.slice(start, start + 20);
+        // Stage 1: detect claims with Jev (batches of 20 messages, 2 questions each).
+        const detected: Array<DetectedOpportunity> = [];
+        for (let start = 0; start < messages.length; start += 20) {
+          const batch = messages.slice(start, start + 20);
           const result = yield* client
             .ask({
               harness,
               state: {
-                candidates: batch.map((item, index) => ({
-                  id: `c${index}`,
-                  pattern: item.pattern,
-                  matchedText: item.matchedText,
-                  context: item.context,
-                })),
+                messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
               },
-              questions: claimConfirmQuestions(
-                batch.map((item, index) => ({ id: `c${index}`, matchedText: item.matchedText })),
-              ),
+              questions: claimDetectionQuestions({
+                count: batch.length,
+                subject: "assistant_message",
+              }),
             })
             .pipe(Effect.mapError(describeJevError));
-          const kept = confirmedIndexes(result.answers, batch.length);
-          for (const index of kept) {
-            const item = batch[index];
-            if (item !== undefined) confirmed.push(item);
+          for (const found of detectedClaims(result.answers, batch.length)) {
+            const message = batch[found.index];
+            if (message !== undefined) detected.push(toDetectedOpportunity(message, found.kind));
           }
         }
 
-        // Stage 2: align each confirmed claim with the questions asked in its session.
+        // Stage 2: align each detected claim with the questions asked in its session.
         const events = yield* log
           .read()
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
@@ -328,8 +408,8 @@ export function runCli(
             sessionQuestions.set(key, list);
           }
         }
-        const bySession = new Map<string, Array<RawOpportunity>>();
-        for (const item of confirmed) {
+        const bySession = new Map<string, Array<DetectedOpportunity>>();
+        for (const item of detected) {
           const key = `${item.harness}|${item.sessionID}`;
           const list = bySession.get(key) ?? [];
           list.push(item);
@@ -352,12 +432,11 @@ export function runCli(
                   claims: batch.map((item, index) => ({
                     id: `a${index}`,
                     pattern: item.pattern,
-                    matchedText: item.matchedText,
-                    context: item.context,
+                    excerpt: item.excerpt,
                   })),
                 },
                 questions: claimAlignmentQuestions(
-                  batch.map((item, index) => ({ id: `a${index}`, matchedText: item.matchedText })),
+                  batch.map((item, index) => ({ id: `a${index}`, excerpt: item.excerpt })),
                 ),
               })
               .pipe(Effect.mapError(describeJevError));
@@ -384,7 +463,7 @@ export function runCli(
           }
         }
         yield* Effect.sync(() => {
-          printAuditSummary({ raw: opportunities, correlated }, dryRun);
+          printAuditSummary({ messages, correlated }, dryRun);
         });
         return 0;
       }
