@@ -157,7 +157,7 @@ const scoreMatches = (question: ScoreQuestion, answer: Answer): boolean => {
  * every requested question is answered with its own primitive, a choice from
  * its criteria, and bounded numbers. Anything else must fail closed.
  */
-const answerMatchesQuestion = (question: Question, answer: Answer): boolean => {
+export const answerMatchesQuestion = (question: Question, answer: Answer): boolean => {
   switch (question._tag) {
     case "noul":
       return noulMatches(answer);

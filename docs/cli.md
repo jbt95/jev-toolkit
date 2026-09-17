@@ -239,6 +239,17 @@ Reads the harness hook payload (`{ "prompt": "…" }`) on stdin and prints
 exits `0` and never blocks a prompt. Available for any harness with a prompt
 hook.
 
+```console
+jev hook prompt [--verify]   # or JEV_HOOK_VERIFY=1
+```
+
+The local regex is a recall-oriented prefilter (see `jev audit prompts` for
+its noise rate). With `--verify`, a regex hit is confirmed through Jev — the
+SDK-backed client asks the `user_prompt` claim-detection question over the
+sanitized prompt and prints the directive only when Jev routes it (noul ≥
+0.5). When Jev is unreachable the hook fails open (prints the directive) so a
+single outage never suppresses routing; the call is logged either way.
+
 ## mcp — the judgment surface
 
 ```console

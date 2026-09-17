@@ -2,8 +2,10 @@
 
 ## Stack
 
-- Runtime dependency: **`effect` 4.0.0-rc.112 only**, pinned exactly (mirrors
-  `~/personal/creatorOS`). Everything else is a devDependency:
+- Runtime dependencies: **`effect` 4.0.0-rc.112** (pinned exactly, mirrors
+  `~/personal/creatorOS`) and **`@typesafe-ai/sdk` 0.6.0** (pinned exactly;
+  production Jev transport via `TypeSafeClient.systemOne`). Everything else is
+  a devDependency:
   `typescript` 5.9.2, `@types/node` 22.18.0, `vitest` 3.2.4, `oxlint` 1.81.0,
   `@oxlint/plugins` 1.81.0, `oxfmt` 0.66.0.
 - TypeScript strict, ESM, explicit `.ts` extensions

@@ -24,14 +24,8 @@ import {
   digestPiOmp,
   type SessionDigest,
 } from "../audit/sessions.ts";
-import {
-  JevClient,
-  JevClientLive,
-  createFetchTransport,
-  describeJevError,
-  formatAnswers,
-  type AskResult,
-} from "../core/client.ts";
+import { JevClient, describeJevError, formatAnswers, type AskResult } from "../core/client.ts";
+import { JevClientSdkLive, sdkBaseURL } from "../core/sdk-client.ts";
 import { matchQuantitativeClaim } from "../core/detector.ts";
 import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../core/directives.ts";
 import { EventLog, EventLogLive, type EventLogService } from "../core/events.ts";
@@ -93,7 +87,7 @@ commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
-  hook     harness hooks: jev hook prompt | jev hook context
+  hook     harness hooks: jev hook prompt [--verify] | jev hook context
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
   triage   classify failures or review findings: jev triage failure | review
@@ -230,10 +224,15 @@ const harnessFromEnv = (fallback: Harness): Harness =>
 
 export type CliServices = JevClient | EventLog | LoopGuard;
 
+/** Precision gate for the prompt hook: confirm a regex hit with Jev. */
+const hookVerifyEnabled = (rest: ReadonlyArray<string>): boolean =>
+  rest.includes("--verify") ||
+  Option.fromUndefinedOr(process.env.JEV_HOOK_VERIFY).pipe(Option.exists((value) => value === "1"));
+
 const runHook = (
   rest: ReadonlyArray<string>,
   stdin: () => Effect.Effect<string, string>,
-): Effect.Effect<number, string> =>
+): Effect.Effect<number, string, CliServices> =>
   Effect.gen(function* () {
     if (rest[0] === "context") {
       yield* Effect.sync(() => {
@@ -243,20 +242,44 @@ const runHook = (
     }
     if (rest[0] !== "prompt") {
       yield* Effect.sync(() => {
-        console.error("usage: jev hook prompt | jev hook context");
+        console.error("usage: jev hook prompt [--verify] | jev hook context");
       });
       return 1;
     }
     const raw = yield* stdin();
     const decoded = decodeHookInput(raw);
-    if (Option.isSome(decoded)) {
-      const hits = matchQuantitativeClaim(decoded.value.prompt);
-      if (hits.length > 0) {
-        yield* Effect.sync(() => {
-          console.log(PROMPT_DIRECTIVE);
-        });
-      }
+    if (Option.isNone(decoded)) return 0;
+    const hits = matchQuantitativeClaim(decoded.value.prompt);
+    if (hits.length === 0) return 0;
+    if (!hookVerifyEnabled(rest)) {
+      yield* Effect.sync(() => {
+        console.log(PROMPT_DIRECTIVE);
+      });
+      return 0;
     }
+    // The regex is a recall prefilter; Jev (via the SDK-backed client) decides
+    // whether the prompt really asks for a routed judgment. Fail open: when
+    // Jev is unreachable the directive still prints and the hook never blocks.
+    const client = yield* JevClient;
+    const harness = harnessFromEnv("cli");
+    const safePrompt = clip(stripFencedCode(redact(decoded.value.prompt)), 2000);
+    const outcome = yield* Effect.result(
+      client.ask({
+        harness,
+        state: { messages: [{ id: "m0", text: safePrompt }] },
+        questions: claimDetectionQuestions({ count: 1, subject: "user_prompt" }),
+      }),
+    );
+    if (outcome._tag === "Failure") {
+      yield* Effect.sync(() => {
+        console.log(PROMPT_DIRECTIVE);
+      });
+      return 0;
+    }
+    if (detectedClaims(outcome.success.answers, 1).length === 0) return 0;
+    yield* Effect.sync(() => {
+      console.log(PROMPT_DIRECTIVE);
+    });
     return 0;
   });
 
@@ -1272,16 +1295,13 @@ const isEntrypoint = Option.fromUndefinedOr(process.argv[1]).pipe(
 
 if (isEntrypoint) {
   const apiKey = Option.fromUndefinedOr(process.env.TYPESAFE_API_KEY);
-  // The transport is only reached when a key exists; the client rejects earlier otherwise.
-  const transport = createFetchTransport(
-    apiEndpoint(),
-    Option.getOrElse(apiKey, () => ""),
-  );
+  // Production judgments go through the TypeSafe SDK (Jev); the hand-rolled
+  // fetch transport remains for tests and offline harnesses.
   const eventLog = EventLogLive(eventsPath());
   const layers = Layer.mergeAll(
     eventLog,
     LoopGuardLive(loopStatePath()),
-    JevClientLive({ apiKey, transport }).pipe(Layer.provide(eventLog)),
+    JevClientSdkLive({ apiKey, baseURL: sdkBaseURL(apiEndpoint()) }).pipe(Layer.provide(eventLog)),
   );
   const code = await Effect.runPromise(runCli(process.argv.slice(2), layers));
   process.exitCode = code;
