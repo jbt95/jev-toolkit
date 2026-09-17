@@ -238,9 +238,11 @@ flowchart LR
 - **Effect everywhere in core.** `Effect.Effect` returns, `Data.TaggedError`
   failures, services via `Context.Service` + Layers. Platform APIs (`fetch`,
   `node:fs`, `node:sqlite`) are wrapped at the boundary once.
-- **Relative imports for harness-loaded files.** Plugins and extensions load
-  through symlinks where tsconfig aliases do not apply; the `@/…` alias is for
-  tests and repo tooling only.
+- **Self-contained harness shims.** Plugins and extensions import only their
+  harness SDK and delegate shared logic to the `jev` CLI (`hook prompt`,
+  `hook context`, `triage failure`); symlinked loaders resolve repo-relative
+  imports against the link path, so those fail. The `@/…` alias is for tests
+  and repo tooling only.
 - **Schema at every boundary.** JSONL lines, API responses, stdin payloads,
   transcripts, git output. Malformed input is skipped or failed explicitly.
 - **Log-first.** New triggers observe and record before they gate; only the

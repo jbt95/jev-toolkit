@@ -37,8 +37,12 @@ Add to the global `opencode.json(c)`:
 
 1. Install the plugin dependency (network required once). The plugin loads
    through the `~/.config/opencode/plugins/typesafe` symlink, so its bare
-   `@opencode/plugin` import resolves from this directory; relative `src/`
-   imports work through symlinks, tsconfig aliases do not:
+   `@opencode/plugin` import resolves from this directory. The plugin imports
+   nothing else from the repo: it shells out to the `jev` CLI (`hook prompt`,
+   `hook context`, `triage failure`), so `jev` must be on `PATH` (see
+   `scripts/install.sh`). Relative repo imports do **not** work here — the Bun
+   loader resolves them against the link path, so `../../core/…` looks for
+   `~/.config/opencode/core/…`:
    ```console
    cd ~/personal/jev-toolkit/src/integrations/opencode2 && bun install
    ```

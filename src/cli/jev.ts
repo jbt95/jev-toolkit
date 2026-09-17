@@ -31,7 +31,7 @@ import {
   formatAnswers,
 } from "../core/client.ts";
 import { matchQuantitativeClaim } from "../core/detector.ts";
-import { PROMPT_DIRECTIVE } from "../core/directives.ts";
+import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../core/directives.ts";
 import { EventLog, EventLogLive } from "../core/events.ts";
 import { LoopGuard, LoopGuardLive, fingerprint } from "../core/loops.ts";
 import { serveMeter } from "../core/metrics.ts";
@@ -83,7 +83,7 @@ commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
-  hook     Claude Code hooks: jev hook prompt
+  hook     harness hooks: jev hook prompt | jev hook context
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
   triage   classify failures or review findings: jev triage failure | review
@@ -964,9 +964,15 @@ export function runCli(
         return 0;
       }
       case "hook": {
+        if (rest[0] === "context") {
+          yield* Effect.sync(() => {
+            console.log(CONTEXT_POLICY);
+          });
+          return 0;
+        }
         if (rest[0] !== "prompt") {
           yield* Effect.sync(() => {
-            console.error("usage: jev hook prompt");
+            console.error("usage: jev hook prompt | jev hook context");
           });
           return 1;
         }

@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { join } from "node:path";
 import { runCli, type CliServices } from "@/cli/jev.ts";
 import { JevClient, makeJevClient } from "@/core/client.ts";
+import { CONTEXT_POLICY } from "@/core/directives.ts";
 import { EventLogLive, makeEventLog } from "@/core/events.ts";
 import { LoopGuardLive } from "@/core/loops.ts";
 import { makeTestTransport, tempEventsPath } from "../helpers.ts";
@@ -112,6 +113,17 @@ describe("jev CLI", () => {
 
     expect(code).toBe(0);
     expect(String(logSpy.mock.calls[0]?.[0])).toContain("[Jev policy]");
+  });
+
+  it("prints the shared policy line for the context hook", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await Effect.runPromise(
+      runCli(["hook", "context"], layersFor(await tempEventsPath())),
+    );
+
+    expect(code).toBe(0);
+    expect(String(logSpy.mock.calls[0]?.[0])).toBe(CONTEXT_POLICY);
   });
 
   it("stays silent for neutral or malformed hook input", async () => {

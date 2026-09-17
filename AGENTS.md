@@ -10,11 +10,12 @@
 - TypeScript strict, ESM, explicit `.ts` extensions
   (`allowImportingTsExtensions`), `verbatimModuleSyntax`, `isolatedModules`.
   No build step. Node >= 26.
-- Import paths: everything a harness loads must use relative imports —
-  plugins/extensions load through symlinks where tsconfig aliases do not apply
-  (verified 2026-09-17 for OpenCode2's Bun loader and Pi's jiti). The `@/…`
-  alias exists for tests and repo-internal tooling only; the CLI runs on plain
-  Node, which ignores tsconfig paths.
+- Import paths: harness-loaded files are self-contained shims — import only the
+  harness SDK and shell out to the `jev` CLI for shared logic. Symlinked loaders
+  break repo-relative imports: OpenCode2's Bun loader resolves them against the
+  link path (`../../core/…` fails; verified 2026-09-17) and Pi's jiti does not
+  resolve them either. The `@/…` alias exists for tests and repo-internal
+  tooling only; the CLI runs on plain Node, which ignores tsconfig paths.
 
 ## Effect rules (mirror ~/personal/creatorOS)
 
