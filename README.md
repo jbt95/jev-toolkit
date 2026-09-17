@@ -120,7 +120,6 @@ launchd/            always-on meter plist
 scripts/            install.sh · install-dashboard.sh · check-metrics.sh
 tools/oxlint/       vendored anti-slop rule groups
 docs/               this documentation set
-docs/plans/         implementation plans
 ```
 
 ## Tooling
