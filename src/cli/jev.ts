@@ -49,6 +49,7 @@ import { Harness, QuestionMap, type Answer } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
+import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import { claimDetectionQuestions, detectedClaims } from "../question-packs/claim-detection.ts";
 import {
@@ -89,7 +90,8 @@ commands:
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
   triage   classify failures or review findings: jev triage failure | review
-  mcp      stdio MCP server exposing typesafe_ask (single tool surface)
+  eval     replay labeled fixtures through a pack: jev eval pack --fixtures FILE
+  mcp      stdio MCP server exposing typesafe_ask, typesafe_verify, typesafe_review
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
@@ -281,6 +283,9 @@ export function runCli(
       case "triage": {
         return yield* runTriage(rest, stdin);
       }
+      case "eval": {
+        return yield* runEval(rest);
+      }
       case "hook": {
         if (rest[0] === "context") {
           yield* Effect.sync(() => {
@@ -308,9 +313,10 @@ export function runCli(
       }
       case "mcp": {
         const client = yield* JevClient;
+        const log = yield* EventLog;
         const harness = harnessFromEnv("script");
         yield* Effect.tryPromise({
-          try: () => serveMcp(createMcpDeps(harness, client.ask)),
+          try: () => serveMcp(createMcpDeps({ harness, ask: client.ask, log })),
           catch: () => "mcp server failed",
         });
         return 0;
@@ -353,6 +359,58 @@ export function runCli(
     return 1;
   }).pipe(Effect.provide(layers));
 }
+
+const printPackLab = (report: PackLabReport): void => {
+  console.log(
+    `pack ${report.pack}  cases ${report.cases.length}  repeat ${report.repeat}  model ${report.model}`,
+  );
+  for (const entry of report.cases) {
+    const expectation =
+      entry.expected === undefined
+        ? ""
+        : ` expected=${JSON.stringify(entry.expected)} agree=${entry.agreed === true ? "yes" : "no"}`;
+    const confidence =
+      entry.meanConfidence === undefined ? "" : ` conf=${entry.meanConfidence.toFixed(2)}`;
+    const unstable =
+      entry.unstableAnswers.length === 0 ? "" : ` unstable=${entry.unstableAnswers.join(",")}`;
+    console.log(
+      `${entry.id}: ${JSON.stringify(entry.summary)}${expectation}${confidence} ` +
+        `spread=${entry.maxSpread.toFixed(2)}${unstable} tokens=${entry.inputTokens}/${entry.outputTokens} latency=${entry.latencyMs}ms`,
+    );
+  }
+  console.log(
+    `total: compared=${report.compared} agreed=${report.agreed} ` +
+      `tokens=${report.inputTokens} in / ${report.outputTokens} out mean_latency_ms=${report.meanLatencyMs}`,
+  );
+};
+
+const EVAL_USAGE = "usage: jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--json]";
+
+const runEval = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    const fixtures = flag(rest, "--fixtures");
+    if (rest[0] !== "pack" || Option.isNone(fixtures)) {
+      yield* Effect.sync(() => {
+        console.error(EVAL_USAGE);
+      });
+      return 1;
+    }
+    const requested = Number.parseInt(flag(rest, "--repeat").pipe(Option.getOrElse(() => "1")), 10);
+    const repeat = Number.isNaN(requested) ? 1 : requested;
+    const model = Option.getOrUndefined(flag(rest, "--model"));
+    const client = yield* JevClient;
+    const harness = harnessFromEnv("script");
+    const report = yield* runPackLab(
+      { fixturePath: fixtures.value, repeat, model },
+      client.ask,
+      harness,
+    ).pipe(Effect.mapError((error) => `eval failed: ${error.reason}`));
+    yield* Effect.sync(() => {
+      if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
+      else printPackLab(report);
+    });
+    return 0;
+  });
 
 const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
   Effect.gen(function* () {

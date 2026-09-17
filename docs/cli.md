@@ -15,7 +15,8 @@ jev label sessions --since 24h           # outcome / friction / waste per sessio
 jev audit run --since 24h                # detect quantitative claims agents made
 jev audit prompts --since 7d             # measure the live prompt trigger
 jev hook prompt                          # harness hook: print the directive when applicable
-jev mcp                                  # MCP server: the typesafe_ask surface
+jev eval pack --fixtures FILE            # replay labeled fixtures through a pack
+jev mcp                                  # MCP server: ask + verify + review tools
 jev meter serve [--port 8788]            # Prometheus metrics
 ```
 
@@ -193,6 +194,35 @@ of 10: outcome (`shipped`/`blocked`/`abandoned`/`ongoing`), friction score
 `review`, `analysis`, `release`, `content`, `other`). Appends `session_label`
 events. `--dry-run` prints the digests as JSON without calling Jev.
 
+## eval pack — replay labeled fixtures
+
+```console
+jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--json]
+```
+
+Fixtures are one JSON file:
+
+```jsonc
+{
+  "pack": "reviewer | commit | profile",
+  "cases": [{ "id": "r1", "input": { /* … */ }, "expected": { "blockers": 1 } }]
+}
+```
+
+`input` matches the pack's shape: reviewer findings
+(`{ meta?, findings: [{ id, title, detail }] }`), a commit
+(`{ message, spec? }`), or a review profile state
+(`{ task?, diff?, files?, repositoryContext? }`). `expected` is optional; when
+present, every numeric key is compared exactly against the run summary and the
+report counts agreement.
+
+The report lists per case: the summary, agreement, mean confidence, the largest
+score spread across repeats, unstable answer ids, tokens, and latency; then
+totals. `--repeat N` (max 10) runs each case N times with identical input so
+drift is visible before thresholds are trusted; `--model` pins a version for
+comparison; `--json` prints the report as JSON. Each run's Jev calls also append
+`call` events to the local log.
+
 ## events — inspect the log
 
 ```console
@@ -209,13 +239,13 @@ Reads the harness hook payload (`{ "prompt": "…" }`) on stdin and prints
 exits `0` and never blocks a prompt. Available for any harness with a prompt
 hook.
 
-## mcp — the single judgment surface
+## mcp — the judgment surface
 
 ```console
-jev mcp   # stdio JSON-RPC 2.0, one tool: typesafe_ask
+jev mcp   # stdio JSON-RPC 2.0: typesafe_ask, typesafe_verify, typesafe_review
 ```
 
-See [mcp.md](mcp.md) for the protocol, schema, and error contract.
+See [mcp.md](mcp.md) for the protocol, tool schemas, and error contract.
 
 ## meter serve — Prometheus metrics
 

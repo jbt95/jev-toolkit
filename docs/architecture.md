@@ -40,8 +40,11 @@ flowchart LR
 
 Two rules keep this small:
 
-1. **`typesafe_ask` lives once.** Every MCP-capable harness connects to the same
-   `jev mcp` server; local CLI commands are the only other callers.
+1. **Judgment lives once.** Every MCP-capable harness connects to the same
+   `jev mcp` server; `typesafe_ask` is the generic surface and task-shaped
+   tools wrap question packs instead of reimplementing them (see
+   [mcp.md](mcp.md#tool-surface-policy)). Local CLI commands are the other
+   callers.
 2. **Every judgment is logged.** The client appends to the event log before the
    answer is returned to the caller; a logging failure never fails the call.
 
@@ -91,15 +94,16 @@ All services follow the repo conventions: class-style `Context.Service`,
 
 ## Event log
 
-One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Four kinds,
+One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Five kinds,
 all validated by `src/core/schema.ts`:
 
 | Kind | Fields (abridged) | Written by |
 |---|---|---|
 | `call` | harness, sessionID, model, latencyMs, status, questions (id+type), answers, tokens, error? | JevClient on every ask |
 | `opportunity` | harness, sessionID, source, pattern, matched | `audit run` |
-| `triage` | harness, feature (failure/review/commit), numeric summary | triage commands |
+| `triage` | harness, feature (failure/review/commit/verify), numeric summary | triage commands, `typesafe_verify` |
 | `session_label` | harness, sessionID, outcome, friction, waste, taskType | `label sessions` |
+| `review` | harness, sessionID, model, dimensions (normalized score, confidence, applicable, direction?), topWeakness? | `typesafe_review` |
 
 ```mermaid
 flowchart LR

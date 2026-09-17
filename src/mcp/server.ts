@@ -1,9 +1,10 @@
-// Stdio MCP server: one tool (`typesafe_ask`) behind newline-delimited
-// JSON-RPC 2.0. This is the single judgment surface for every MCP-capable
-// harness. Shapes mirror
-// ~/personal/leadline/src/mcp.rs: version-echoing `initialize` (with an
-// `instructions` field hosts may inject), strict `tools/call` validation,
-// and text-content tool results. stdout carries only JSON-RPC lines.
+// Stdio MCP server: judgment tools behind newline-delimited JSON-RPC 2.0.
+// `typesafe_ask` is the generic primitive; task-shaped tools wrap question
+// packs, own their state assembly, and log through the same JevClient.
+// Shapes mirror ~/personal/leadline/src/mcp.rs: version-echoing `initialize`
+// (with an `instructions` field hosts may inject), strict `tools/call`
+// validation, and text-content tool results. stdout carries only JSON-RPC lines.
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -17,7 +18,23 @@ import {
   type JevError,
 } from "../core/client.ts";
 import { CONTEXT_POLICY } from "../core/directives.ts";
-import { Harness, QuestionMap } from "../core/schema.ts";
+import type { EventLogService } from "../core/events.ts";
+import { Harness, QuestionMap, type JevEvent, type ReviewDimensionResult } from "../core/schema.ts";
+import { redact } from "../core/text.ts";
+import {
+  claimVerdicts,
+  evidenceQuestions,
+  numbersMissingFromEvidence,
+  type EvidenceClaim,
+} from "../question-packs/evidence-matrix.ts";
+import {
+  PreviousEvaluation,
+  evaluateReview,
+  hasReviewContext,
+  normalizeReviewScore,
+  reviewQuestions,
+  sanitizeReviewInput,
+} from "../question-packs/review-profile.ts";
 
 export type JsonValue = Schema.Schema.Type<typeof Schema.Json>;
 
@@ -25,8 +42,25 @@ export type McpToolOutcome =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly text: string };
 
-export interface McpDeps {
+export interface McpTool {
+  readonly name: string;
+  readonly title: string;
+  readonly description: string;
+  readonly inputSchema: JsonValue;
   readonly call: (args: JsonValue) => Promise<McpToolOutcome>;
+}
+
+export interface McpDeps {
+  readonly tools: ReadonlyArray<McpTool>;
+}
+
+export type JevAsk = (input: AskInput) => Effect.Effect<AskResult, JevError>;
+
+export interface McpConfig {
+  readonly harness: Harness;
+  readonly ask: JevAsk;
+  /** Review and verification summaries are appended here; logging never fails a call. */
+  readonly log?: EventLogService;
 }
 
 const JsonValueSchema = Schema.Json;
@@ -56,11 +90,33 @@ const AskArgs = Schema.Struct({
 });
 const decodeAskArgs = Schema.decodeUnknownEffect(AskArgs);
 
-const TOOL_NAME = "typesafe_ask";
-const SERVER_VERSION = "0.1.0";
+const MAX_CLAIMS = 20;
+const MAX_EVIDENCE_CHARS = 40_000;
+const MAX_REVIEW_STATE_CHARS = 90_000;
+
+const VerifyArgs = Schema.Struct({
+  claims: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString, text: Schema.NonEmptyString })),
+  evidence: Schema.String,
+  sessionID: Schema.optional(Schema.NonEmptyString),
+});
+const decodeVerifyArgs = Schema.decodeUnknownEffect(VerifyArgs);
+
+const ReviewArgs = Schema.Struct({
+  task: Schema.optional(Schema.String),
+  diff: Schema.optional(Schema.String),
+  files: Schema.optional(
+    Schema.Array(Schema.Struct({ path: Schema.NonEmptyString, content: Schema.String })),
+  ),
+  repositoryContext: Schema.optional(Schema.String),
+  previousEvaluation: Schema.optional(PreviousEvaluation),
+  sessionID: Schema.optional(Schema.NonEmptyString),
+});
+const decodeReviewArgs = Schema.decodeUnknownEffect(ReviewArgs);
+
+const SERVER_VERSION = "0.2.0";
 const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 
-const INPUT_SCHEMA: JsonValue = {
+const ASK_INPUT_SCHEMA: JsonValue = {
   type: "object",
   properties: {
     state: {
@@ -87,11 +143,85 @@ const INPUT_SCHEMA: JsonValue = {
   additionalProperties: false,
 };
 
-const TOOL_DESCRIPTION =
+const VERIFY_INPUT_SCHEMA: JsonValue = {
+  type: "object",
+  properties: {
+    claims: {
+      type: "array",
+      description: "Claims to verify, one per entry. Keep each claim short and self-contained.",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Stable id used in the verdict lines." },
+          text: { type: "string", description: "The exact claim to check." },
+        },
+        required: ["id", "text"],
+        additionalProperties: false,
+      },
+    },
+    evidence: {
+      type: "string",
+      description:
+        "Serialized evidence the claims are checked against (test output, git facts, excerpts). " +
+        "Credentials are redacted before the call.",
+    },
+    sessionID: { type: "string", description: "Optional harness session id." },
+  },
+  required: ["claims", "evidence"],
+  additionalProperties: false,
+};
+
+const REVIEW_INPUT_SCHEMA: JsonValue = {
+  type: "object",
+  properties: {
+    task: { type: "string", description: "What the change was asked to do." },
+    diff: { type: "string", description: "Focused diff under review." },
+    files: {
+      type: "array",
+      description: "Surrounding files needed to judge the change (at most 8).",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+        required: ["path", "content"],
+        additionalProperties: false,
+      },
+    },
+    repositoryContext: {
+      type: "string",
+      description: "Relevant conventions, invariants, and test results.",
+    },
+    previousEvaluation: {
+      type: "object",
+      description:
+        "The `dimensions` array from an earlier typesafe_review result, to compare directly.",
+    },
+    sessionID: { type: "string", description: "Optional harness session id." },
+  },
+  required: [],
+  additionalProperties: false,
+};
+
+const ASK_DESCRIPTION =
   "Ask TypeSafe/Jev typed questions over a state and get calibrated, structured answers. " +
   "Primitives: choice (pick one of a defined set), noul (probability of yes), score " +
   "(probability-weighted rating across ordered levels). Use for narrow judgments the code " +
   "path needs: routing, ranking, extraction, verification. Every call is logged locally.";
+
+const VERIFY_DESCRIPTION =
+  "Verify claims against supplied evidence before publishing them. Code reports which claim " +
+  "numbers the evidence does not contain; Jev judges each remaining claim as supported, " +
+  "contradicted, unrelated, or insufficient, with confidence. Use for draft answers and " +
+  "completion claims. Redacts credentials; never logs the evidence.";
+
+const REVIEW_DESCRIPTION =
+  "Review a change across eight independent quality dimensions (correctness, cognitive " +
+  "complexity, readability, modularity, coupling, changeability, test quality, security). " +
+  "Each dimension gets an applicability gate and a score; weak dimensions and direct " +
+  "before/after directions are returned. There is no blended overall score. Dimensions " +
+  "are caller-supplied code, redacted and clipped; scores only are logged.";
 
 const ok = (id: JsonValue, result: JsonValue): string =>
   JSON.stringify({ jsonrpc: "2.0", id, result });
@@ -99,7 +229,216 @@ const ok = (id: JsonValue, result: JsonValue): string =>
 const failure = (id: JsonValue, code: number, message: string): string =>
   JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } });
 
-const initializeResult = (params: Option.Option<JsonValue>): JsonValue => {
+const appendEvent = (
+  log: EventLogService | undefined,
+  build: (ts: string) => JevEvent,
+): Promise<void> =>
+  log === undefined
+    ? Promise.resolve()
+    : Effect.runPromise(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          yield* log.append(build(new Date(now).toISOString()));
+        }).pipe(Effect.orElseSucceed(() => undefined)),
+      );
+
+const runAsk = async (config: McpConfig, input: AskInput): Promise<McpToolOutcome> => {
+  const outcome = await Effect.runPromise(Effect.result(config.ask(input)));
+  if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+  return { ok: true, text: formatAnswers(outcome.success) };
+};
+
+const askTool = (config: McpConfig): McpTool => ({
+  name: "typesafe_ask",
+  title: "TypeSafe Ask",
+  description: ASK_DESCRIPTION,
+  inputSchema: ASK_INPUT_SCHEMA,
+  call: async (args) => {
+    const decoded = await Effect.runPromise(Effect.result(decodeAskArgs(args)));
+    if (decoded._tag === "Failure") {
+      return { ok: false, text: `invalid typesafe_ask arguments: ${decoded.failure.message}` };
+    }
+    const payload = decoded.success;
+    return runAsk(config, {
+      harness: config.harness,
+      state: payload.state,
+      questions: payload.questions,
+      model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+      sessionID: payload.sessionID,
+    });
+  },
+});
+
+const verifyTool = (config: McpConfig): McpTool => ({
+  name: "typesafe_verify",
+  title: "TypeSafe Verify",
+  description: VERIFY_DESCRIPTION,
+  inputSchema: VERIFY_INPUT_SCHEMA,
+  call: async (args) => {
+    const decoded = await Effect.runPromise(Effect.result(decodeVerifyArgs(args)));
+    if (decoded._tag === "Failure") {
+      return { ok: false, text: `invalid typesafe_verify arguments: ${decoded.failure.message}` };
+    }
+    const payload = decoded.success;
+    if (payload.claims.length === 0) {
+      return { ok: false, text: "typesafe_verify needs at least one claim" };
+    }
+    if (payload.claims.length > MAX_CLAIMS) {
+      return { ok: false, text: `typesafe_verify accepts at most ${MAX_CLAIMS} claims per call` };
+    }
+    if (payload.evidence.length > MAX_EVIDENCE_CHARS) {
+      return {
+        ok: false,
+        text: `evidence exceeds ${MAX_EVIDENCE_CHARS} characters; send a focused excerpt`,
+      };
+    }
+    const claims: ReadonlyArray<EvidenceClaim> = payload.claims.map((claim) => ({
+      id: claim.id,
+      text: redact(claim.text),
+    }));
+    const input = { claims, evidence: redact(payload.evidence) };
+    const outcome = await Effect.runPromise(
+      Effect.result(
+        config.ask({
+          harness: config.harness,
+          state: {
+            claims: claims.map((claim) => ({
+              id: claim.id,
+              text: claim.text,
+              missingNumbers: numbersMissingFromEvidence(claim.text, input.evidence),
+            })),
+            evidence: input.evidence,
+          },
+          questions: evidenceQuestions(input),
+          sessionID: payload.sessionID,
+        }),
+      ),
+    );
+    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+
+    const verdicts = claimVerdicts(outcome.success.answers, input);
+    const summary = {
+      claims: verdicts.length,
+      supported: verdicts.filter((verdict) => verdict.verdict === "supported").length,
+      contradicted: verdicts.filter((verdict) => verdict.verdict === "contradicted").length,
+      unrelated: verdicts.filter((verdict) => verdict.verdict === "unrelated").length,
+      insufficient: verdicts.filter((verdict) => verdict.verdict === "insufficient").length,
+      needs_evidence: verdicts.filter((verdict) => verdict.needsEvidence).length,
+    };
+    await appendEvent(config.log, (ts) => ({
+      _tag: "triage",
+      ts,
+      harness: config.harness,
+      sessionID: payload.sessionID,
+      feature: "verify",
+      summary,
+    }));
+
+    const lines = verdicts.map((verdict) => {
+      const missing =
+        verdict.missingNumbers.length > 0
+          ? ` [numbers not in evidence: ${verdict.missingNumbers.join(", ")}]`
+          : "";
+      const needs = verdict.needsEvidence ? " [needs evidence]" : "";
+      return `${verdict.id}: ${verdict.verdict} (confidence ${verdict.confidence})${missing}${needs}`;
+    });
+    return {
+      ok: true,
+      text: [
+        `jev ${outcome.success.model}`,
+        ...lines,
+        `usage: ${outcome.success.usage.input} in / ${outcome.success.usage.output} out`,
+      ].join("\n"),
+    };
+  },
+});
+
+const reviewTool = (config: McpConfig): McpTool => ({
+  name: "typesafe_review",
+  title: "TypeSafe Review",
+  description: REVIEW_DESCRIPTION,
+  inputSchema: REVIEW_INPUT_SCHEMA,
+  call: async (args) => {
+    const decoded = await Effect.runPromise(Effect.result(decodeReviewArgs(args)));
+    if (decoded._tag === "Failure") {
+      return { ok: false, text: `invalid typesafe_review arguments: ${decoded.failure.message}` };
+    }
+    const payload = decoded.success;
+    const input = sanitizeReviewInput(payload);
+    if (!hasReviewContext(input)) {
+      return {
+        ok: false,
+        text: "typesafe_review needs at least one of task, diff, files, or repositoryContext",
+      };
+    }
+    const stateSize = JSON.stringify(input).length;
+    if (stateSize > MAX_REVIEW_STATE_CHARS) {
+      return {
+        ok: false,
+        text: `review state is ${stateSize} characters; review a focused slice (limit ${MAX_REVIEW_STATE_CHARS})`,
+      };
+    }
+    const outcome = await Effect.runPromise(
+      Effect.result(
+        config.ask({
+          harness: config.harness,
+          state: input,
+          questions: reviewQuestions(input),
+          sessionID: payload.sessionID,
+        }),
+      ),
+    );
+    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+
+    const evaluation = evaluateReview(input, outcome.success.answers);
+    const dimensions: Record<string, ReviewDimensionResult> = {};
+    for (const dimension of evaluation.dimensions) {
+      dimensions[dimension.dimension] = {
+        applicable: dimension.applicable,
+        score: Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(dimension.score), normalizeReviewScore),
+        ),
+        confidence: dimension.confidence,
+        direction: dimension.direction,
+      };
+    }
+    await appendEvent(config.log, (ts) => ({
+      _tag: "review",
+      ts,
+      harness: config.harness,
+      sessionID: payload.sessionID,
+      model: outcome.success.model,
+      dimensions,
+      topWeakness: evaluation.topWeakness,
+    }));
+
+    return {
+      ok: true,
+      text: JSON.stringify(
+        {
+          model: outcome.success.model,
+          dimensions: evaluation.dimensions.map((dimension) => ({
+            dimension: dimension.dimension,
+            applicable: dimension.applicable,
+            score: dimension.score ?? null,
+            confidence: dimension.confidence ?? null,
+            direction: dimension.direction ?? null,
+          })),
+          topWeakness: evaluation.topWeakness,
+          usage: { input: outcome.success.usage.input, output: outcome.success.usage.output },
+        },
+        null,
+        2,
+      ),
+    };
+  },
+});
+
+export function createMcpDeps(config: McpConfig): McpDeps {
+  return { tools: [askTool(config), verifyTool(config), reviewTool(config)] };
+}
+
+const initializeResult = (params: Option.Option<JsonValue>, toolNames: string): JsonValue => {
   const protocolVersion = params.pipe(
     Option.flatMap((value) => decodeInitializeParams(value)),
     Option.flatMap((decoded) => Option.fromUndefinedOr(decoded.protocolVersion)),
@@ -109,7 +448,7 @@ const initializeResult = (params: Option.Option<JsonValue>): JsonValue => {
     protocolVersion,
     capabilities: { tools: {} },
     serverInfo: { name: "jev", version: SERVER_VERSION },
-    instructions: `${CONTEXT_POLICY} Tool: ${TOOL_NAME}.`,
+    instructions: `${CONTEXT_POLICY} Tools: ${toolNames}.`,
   };
 };
 
@@ -120,13 +459,14 @@ const toolsCall = async (
 ): Promise<string> => {
   const parsed = Option.flatMap(params, (value) => decodeToolCallParams(value));
   if (Option.isNone(parsed)) return failure(id, -32602, "tools/call requires { name, arguments? }");
-  if (parsed.value.name !== TOOL_NAME) {
+  const tool = deps.tools.find((candidate) => candidate.name === parsed.value.name);
+  if (tool === undefined) {
     return failure(id, -32602, `unknown tool '${parsed.value.name}'`);
   }
   const args = Option.fromUndefinedOr(parsed.value.arguments).pipe(
     Option.getOrElse((): JsonValue => ({})),
   );
-  const result = await deps.call(args);
+  const result = await tool.call(args);
   if (result.ok) return ok(id, { content: [{ type: "text", text: result.text }] });
   return ok(id, { content: [{ type: "text", text: result.text }], isError: true });
 };
@@ -149,59 +489,28 @@ export async function handleMcpRequest(line: string, deps: McpDeps): Promise<str
   const params = Option.fromUndefinedOr(request.value.params);
   switch (method.value) {
     case "initialize":
-      return ok(id, initializeResult(params));
+      return ok(id, initializeResult(params, deps.tools.map((tool) => tool.name).join(", ")));
     case "ping":
       return ok(id, {});
     case "tools/list":
       return ok(id, {
-        tools: [
-          {
-            name: TOOL_NAME,
-            description: TOOL_DESCRIPTION,
-            inputSchema: INPUT_SCHEMA,
-            annotations: {
-              title: "TypeSafe Ask",
-              readOnlyHint: true,
-              idempotentHint: false,
-              openWorldHint: true,
-            },
+        tools: deps.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          annotations: {
+            title: tool.title,
+            readOnlyHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
           },
-        ],
+        })),
       });
     case "tools/call":
       return await toolsCall(id, params, deps);
     default:
       return failure(id, -32601, `unknown method '${method.value}'`);
   }
-}
-
-/** Wire a Jev ask function (from the provided layers) into MCP deps. */
-export function createMcpDeps(
-  harness: Harness,
-  ask: (input: AskInput) => Effect.Effect<AskResult, JevError>,
-): McpDeps {
-  return {
-    call: async (args) => {
-      const decoded = await Effect.runPromise(Effect.result(decodeAskArgs(args)));
-      if (decoded._tag === "Failure") {
-        return { ok: false, text: `invalid typesafe_ask arguments: ${decoded.failure.message}` };
-      }
-      const payload = decoded.success;
-      const outcome = await Effect.runPromise(
-        Effect.result(
-          ask({
-            harness,
-            state: payload.state,
-            questions: payload.questions,
-            model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
-            sessionID: payload.sessionID,
-          }),
-        ),
-      );
-      if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
-      return { ok: true, text: formatAnswers(outcome.success) };
-    },
-  };
 }
 
 /** Serve MCP over a line stream until it closes (stdio by default). */

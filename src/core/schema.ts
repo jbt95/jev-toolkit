@@ -73,11 +73,36 @@ export type OpportunityEvent = Schema.Schema.Type<typeof OpportunityEvent>;
 
 export const TriageEvent = Schema.TaggedStruct("triage", {
   ...BaseEvent,
-  feature: Schema.Literals(["review", "failure", "commit"]),
+  feature: Schema.Literals(["review", "failure", "commit", "verify"]),
   // Numeric counts/scores only; message text never belongs here.
   summary: Schema.Record(Schema.String, Schema.Number),
 });
 export type TriageEvent = Schema.Schema.Type<typeof TriageEvent>;
+
+export const ReviewDirection = Schema.Literals([
+  "improved",
+  "unchanged",
+  "regressed",
+  "incomparable",
+]);
+export type ReviewDirection = Schema.Schema.Type<typeof ReviewDirection>;
+
+export const ReviewDimensionResult = Schema.Struct({
+  applicable: Schema.Boolean,
+  score: Schema.optional(Schema.Number),
+  confidence: Schema.optional(Schema.Number),
+  direction: Schema.optional(ReviewDirection),
+});
+export type ReviewDimensionResult = Schema.Schema.Type<typeof ReviewDimensionResult>;
+
+/** One quality review run: normalized dimension scores only, never code or diffs. */
+export const ReviewEvent = Schema.TaggedStruct("review", {
+  ...BaseEvent,
+  model: Schema.String,
+  dimensions: Schema.Record(Schema.String, ReviewDimensionResult),
+  topWeakness: Schema.optional(Schema.String),
+});
+export type ReviewEvent = Schema.Schema.Type<typeof ReviewEvent>;
 
 export const SessionLabelEvent = Schema.TaggedStruct("session_label", {
   ...BaseEvent,
@@ -88,5 +113,11 @@ export const SessionLabelEvent = Schema.TaggedStruct("session_label", {
 });
 export type SessionLabelEvent = Schema.Schema.Type<typeof SessionLabelEvent>;
 
-export const JevEvent = Schema.Union([CallEvent, OpportunityEvent, TriageEvent, SessionLabelEvent]);
+export const JevEvent = Schema.Union([
+  CallEvent,
+  OpportunityEvent,
+  TriageEvent,
+  SessionLabelEvent,
+  ReviewEvent,
+]);
 export type JevEvent = Schema.Schema.Type<typeof JevEvent>;

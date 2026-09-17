@@ -350,6 +350,53 @@
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Quality reviews (typesafe_review)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Review scores by dimension",
+      "description": "Mean normalized score (0-1) per quality dimension from typesafe_review runs.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (dimension) (jev_review_score)",
+          "legendFormat": "{{dimension}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Review directions",
+      "description": "Direct before/after directions from reviews that supplied a previous evaluation.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (direction) (increase(jev_review_direction_total[1d]))",
+          "legendFormat": "{{direction}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
     }
   ]
 }

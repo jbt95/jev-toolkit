@@ -43,6 +43,9 @@ query always reflects the current log.
 | `jev_sessions_total` | harness, outcome | labeled sessions by outcome |
 | `jev_waste_total` | harness, pattern | labeled sessions by dominant waste pattern |
 | `jev_session_friction` | harness, le | session friction histogram |
+| `jev_reviews_total` | harness | `typesafe_review` runs |
+| `jev_review_score` | dimension, harness | mean applicable review score (normalized 0–1) |
+| `jev_review_direction_total` | harness, direction | before/after directions recorded by reviews with a previous evaluation |
 
 Notes on semantics:
 

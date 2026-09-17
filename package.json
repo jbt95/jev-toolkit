@@ -2,7 +2,7 @@
   "name": "jev-toolkit",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP-first Jev/TypeSafe toolkit: one typesafe_ask surface over stdio, triage question packs, one event log, Prometheus impact metrics.",
+  "description": "MCP-first Jev/TypeSafe toolkit: a typesafe_ask judgment surface over stdio, triage question packs, one event log, Prometheus impact metrics.",
   "keywords": [
     "jev",
     "mcp",

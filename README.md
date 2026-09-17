@@ -11,7 +11,7 @@ Schema-validated boundaries, no runtime dependencies besides `effect`.
 ```mermaid
 flowchart LR
   H["MCP clients<br/>any harness"]
-  MCP["jev mcp<br/>typesafe_ask"]
+  MCP["jev mcp<br/>typesafe_ask + tools"]
   CLI["jev CLI<br/>hook · triage · check · audit · label"]
   API["TypeSafe API"]
   LOG[("events.jsonl<br/>local only")]
@@ -25,10 +25,15 @@ flowchart LR
 
 ## Features
 
-**Judgment surface** — one `typesafe_ask` tool (MCP, `jev mcp`) with `choice`,
-`noul`, and `score` primitives, calibrated confidence, and full
-`probabilities`. `jev ask` is the same judgment over stdin for harnesses
-without MCP. Details in [docs/mcp.md](docs/mcp.md).
+**Judgment surface** — `typesafe_ask` (MCP, `jev mcp`) with `choice`, `noul`,
+and `score` primitives, next to task-shaped tools that wrap the question packs:
+`typesafe_verify` (claims against evidence) and `typesafe_review` (quality
+dimensions with direct before/after directions). `jev ask` is the same judgment
+over stdin for harnesses without MCP. Details in [docs/mcp.md](docs/mcp.md).
+
+**Pack lab** — `jev eval pack` replays labeled fixtures through a pack,
+repeating identical calls to expose answer drift and reporting agreement,
+confidence, tokens, and latency before thresholds are trusted.
 
 **Deterministic triggers** — `jev hook prompt` prints the Jev directive when
 the latest prompt matches local claim patterns, and `jev triage failure`
@@ -80,9 +85,10 @@ jev`, `args: ["mcp"]`.
 | `jev audit run`      | Detect claims agents made; compliance summary; `--dry-run`                             |
 | `jev audit prompts`  | Measure the live prompt trigger against real prompts                                   |
 | `jev label sessions` | Outcome, friction, and waste labels per session                                        |
+| `jev eval pack`      | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency          |
 | `jev events`         | Tail the local event log                                                               |
 | `jev hook prompt`    | Harness hook adapter (prints the directive or nothing)                                 |
-| `jev mcp`            | MCP server: the `typesafe_ask` surface                                                 |
+| `jev mcp`            | MCP server: `typesafe_ask` plus task-shaped judgment tools                             |
 | `jev meter serve`    | Prometheus metrics from the event log                                                  |
 
 ## Docs
@@ -98,9 +104,10 @@ jev`, `args: ["mcp"]`.
 
 ```
 src/core/           services + schema (client, events, metrics, loops, text, transcript, paths)
-src/mcp/server.ts   stdio MCP server (jev mcp) — the single judgment tool surface
+src/mcp/server.ts   stdio MCP server (jev mcp) — the judgment tool surface
 src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | mcp | meter
 src/question-packs/ detection, alignment, reviewer, failure, commit, session labels
+src/eval/          pack lab: fixture replay, answer drift, and agreement reports
 src/audit/          message extractors (opencode2 DB, claude projects, pi/omp logs)
 src/replay/         review-fixture capture/score measurement aid
 tests/              offline tests + fixtures (fake transports, temp dirs)

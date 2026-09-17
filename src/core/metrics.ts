@@ -91,6 +91,9 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
   const sessionOutcomes = new Map<string, number>();
   const sessionWaste = new Map<string, number>();
   const sessionFriction = new Map<string, Histogram>();
+  const reviews = new Map<string, number>();
+  const reviewScores = new Map<string, { sum: number; count: number }>();
+  const reviewDirections = new Map<string, number>();
   const latestLabel = new Map<string, SessionLabelEvent>();
   const anonymousLabels: Array<SessionLabelEvent> = [];
 
@@ -138,6 +141,24 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
       }
       case "triage": {
         triage.set(event.feature, (triage.get(event.feature) ?? 0) + 1);
+        break;
+      }
+      case "review": {
+        reviews.set(event.harness, (reviews.get(event.harness) ?? 0) + 1);
+        for (const [dimension, result] of Object.entries(event.dimensions)) {
+          const score = Option.fromUndefinedOr(result.score);
+          if (!result.applicable || Option.isNone(score)) continue;
+          const key = `${event.harness}|${dimension}`;
+          const entry = reviewScores.get(key) ?? { sum: 0, count: 0 };
+          entry.sum += score.value;
+          entry.count += 1;
+          reviewScores.set(key, entry);
+          const direction = Option.fromUndefinedOr(result.direction);
+          if (Option.isSome(direction)) {
+            const directionKey = `${event.harness}|${direction.value}`;
+            reviewDirections.set(directionKey, (reviewDirections.get(directionKey) ?? 0) + 1);
+          }
+        }
         break;
       }
       case "session_label": {
@@ -370,6 +391,46 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
           histogram,
         ),
       ),
+    },
+    {
+      name: "jev_reviews_total",
+      help: "Quality review runs by harness.",
+      type: "counter",
+      lines: sorted(reviews).map(([harness, count]) =>
+        sample("jev_reviews_total", [["harness", harness]], count),
+      ),
+    },
+    {
+      name: "jev_review_score",
+      help: "Mean applicable review score (normalized 0-1) by dimension and harness.",
+      type: "gauge",
+      lines: sorted(reviewScores).map(([key, entry]) => {
+        const [harness, dimension] = splitKey(key);
+        return sample(
+          "jev_review_score",
+          [
+            ["dimension", dimension],
+            ["harness", harness],
+          ],
+          entry.count === 0 ? 0 : round(entry.sum / entry.count),
+        );
+      }),
+    },
+    {
+      name: "jev_review_direction_total",
+      help: "Recorded review directions by harness.",
+      type: "counter",
+      lines: sorted(reviewDirections).map(([key, count]) => {
+        const [harness, direction] = splitKey(key);
+        return sample(
+          "jev_review_direction_total",
+          [
+            ["harness", harness],
+            ["direction", direction],
+          ],
+          count,
+        );
+      }),
     },
   ];
 

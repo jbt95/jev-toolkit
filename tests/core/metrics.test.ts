@@ -149,10 +149,49 @@ describe("metrics", () => {
       "jev_sessions_total",
       "jev_waste_total",
       "jev_session_friction",
+      "jev_reviews_total",
+      "jev_review_score",
+      "jev_review_direction_total",
     ]) {
       expect(body).toContain(`# TYPE ${name} `);
       expect(body).toContain(`# HELP ${name} `);
     }
+  });
+
+  it("exposes review counts, normalized scores, and directions", () => {
+    const reviewed: ReadonlyArray<JevEvent> = [
+      ...events,
+      {
+        _tag: "review",
+        ts: "2026-09-17T00:09:00.000Z",
+        harness: "opencode2",
+        sessionID: "s3",
+        model: "jev-1.13.0",
+        dimensions: {
+          correctness: { applicable: true, score: 0.75, confidence: 0.8, direction: "improved" },
+          security: { applicable: false },
+          test_quality: { applicable: true, score: 0.5, confidence: 0.7, direction: "regressed" },
+        },
+        topWeakness: "test_quality",
+      },
+    ];
+
+    const reviewedBody = render(collect(reviewed));
+
+    expect(reviewedBody).toContain('jev_reviews_total{harness="opencode2"} 1');
+    expect(reviewedBody).toContain(
+      'jev_review_score{dimension="correctness",harness="opencode2"} 0.75',
+    );
+    expect(reviewedBody).toContain(
+      'jev_review_score{dimension="test_quality",harness="opencode2"} 0.5',
+    );
+    expect(reviewedBody).not.toContain('dimension="security"');
+    expect(reviewedBody).toContain(
+      'jev_review_direction_total{harness="opencode2",direction="improved"} 1',
+    );
+    expect(reviewedBody).toContain(
+      'jev_review_direction_total{harness="opencode2",direction="regressed"} 1',
+    );
   });
 
   it("counts a re-labeled session once in the distinct labeled-session metric", () => {

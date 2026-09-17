@@ -16,7 +16,10 @@ for metric in \
   jev_confidence_count \
   jev_sessions_total \
   jev_waste_total \
-  jev_session_friction_count; do
+  jev_session_friction_count \
+  jev_reviews_total \
+  jev_review_score \
+  jev_review_direction_total; do
   if curl -fsS --get "$prom/api/v1/query" --data-urlencode "query=count($metric)" 2>/dev/null | grep -q '"value"'; then
     echo "PASS $metric"
   else
