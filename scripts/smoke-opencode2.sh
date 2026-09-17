@@ -1,11 +1,17 @@
 #!/bin/sh
 # End-to-end smoke test: opencode2 + jev-toolkit.
 #
-# Launches a real opencode2 session whose prompt exercises the three MCP tools
-# (typesafe_ask, typesafe_verify, typesafe_review) in order, then checks the
-# event log those calls produced and every operator surface: mcp protocol,
-# ask, events, hook, check commit, triage review, triage failure (loop
-# breaker), eval pack, audit, label, and meter.
+# Launches a real opencode2 session with a generic four-part task (deploy
+# judgment, claim check, code review, commit message) that the jev tools serve
+# WITHOUT naming them, to test whether the agent discovers and routes through
+# the tools on its own. Then checks the event log those calls produced and
+# every operator surface: mcp protocol, ask, events, hook, check commit,
+# triage review, triage failure (loop breaker), eval pack, audit, label,
+# and meter.
+#
+# Note: with the generic prompt the agent-call checks double as a discovery
+# probe — a FAIL there means the agent did not route through Jev on its own,
+# which is itself the finding (see the compliance/coverage metrics).
 #
 # This is NOT part of `npm test`: it calls the live TypeSafe API and the
 # configured model provider, and it spends real tokens. Run it by hand after
@@ -158,27 +164,17 @@ Refs: #42
 EOF
 
 cat > "$root/prompt.txt" <<'EOF'
-You are running a jev-toolkit smoke test. Follow the steps in order and use the jev MCP tools (they may appear with a "jev_" prefix). Do not modify any files. If a tool call fails validation, correct the arguments and retry once.
+You are working in a small TypeScript repo. Do the following four tasks in order. Do not modify any files. Use whatever tools look best suited for each task, including any judgment or review tools the harness offers.
 
-Step 1 - typesafe_ask. Call it once with:
-state: {"service":"api","environment":"staging","tests":"green","incidents_last_week":0}
-questions:
-  safe_to_deploy: {"_tag":"noul","instructions":"Is it safe to deploy this service to staging now?"}
-  deploy_confidence: {"_tag":"score","instructions":"How confident should we be in this deployment?","criteria":["No confidence","Low","Moderate","High","Certain"]}
-  next_action: {"_tag":"choice","instructions":"What is the best next action?","criteria":{"deploy":"deploy now","hold":"hold for more evidence"}}
+Task 1 - deployment readiness. The situation: service "api", environment "staging", tests are green, zero incidents last week. Decide whether it is safe to deploy now, how confident we should be in this deployment, and the best next action (deploy now vs hold for more evidence). Give a calibrated number for every judgment you make.
 
-Step 2 - typesafe_verify. Call it once with:
-claims: [{"id":"c0","text":"all 12 tests pass"},{"id":"c1","text":"coverage is 90%"}]
-evidence: "test run 2026-09-17: 12 passed, 0 failed, 1 skipped; coverage: 82%"
+Task 2 - test report check. Someone claims "all 12 tests pass" and "coverage is 90%". The actual test run output is: "test run 2026-09-17: 12 passed, 0 failed, 1 skipped; coverage: 82%". Say which claims hold up and which do not, with confidence for each verdict.
 
-Step 3 - typesafe_review. Run `git diff` in the current directory first. Then call typesafe_review with:
-task: "make slugify handle separators and unicode safely"
-diff: the exact output of git diff
-Then call typesafe_review a second time with the same task and diff, and previousEvaluation set to {"dimensions": <the dimensions array from the first result>}, to get before/after directions.
+Task 3 - code review. Run `git diff` in the current directory first. The change is supposed to "make slugify handle separators and unicode safely". Review it across correctness, complexity, readability, modularity, coupling, changeability, test quality, and security, scoring each dimension. Then review it a second time, comparing directly against your first review, and report what improved, stayed the same, or regressed.
 
-Step 4 - commit check. Run: jev check commit --message-file .smoke-message.txt
+Task 4 - commit message. The file .smoke-message.txt holds the proposed commit message for this change. Check whether it is a good message (run whatever check fits) and say pass or fail.
 
-Final answer: one line per step, exactly "step 1: ok" or "step 1: failed - <reason>", through step 4. Nothing else.
+Final answer: one line per task, exactly "step 1: ok" or "step 1: failed - <reason>", through step 4. Nothing else.
 EOF
 
 # ---------------------------------------------------------------- agent run
