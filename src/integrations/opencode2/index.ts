@@ -76,7 +76,7 @@ const triageFailure = (text: string): void => {
 /** Minimal structural view of the SDK transcript; the shim imports no SDK types. */
 interface TranscriptPart {
   readonly type: string;
-  readonly text?: string;
+  readonly text?: string | null;
 }
 
 interface TranscriptMessage {
@@ -90,7 +90,9 @@ const latestUserText = (messages: ReadonlyArray<TranscriptMessage>): string => {
     const message = messages[index];
     if (message === undefined || message.role !== "user") continue;
     return message.content
-      .flatMap((part) => (part.type === "text" && part.text !== undefined ? [part.text] : []))
+      .flatMap((part) =>
+        part.type === "text" && part.text !== undefined && part.text !== null ? [part.text] : [],
+      )
       .join("\n");
   }
   return "";
