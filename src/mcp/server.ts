@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import {
   describeJevError,
   formatAnswers,
@@ -203,12 +204,16 @@ export function createMcpDeps(
   };
 }
 
-/** Serve MCP over stdio until stdin closes. */
-export async function serveMcp(deps: McpDeps): Promise<void> {
-  const lines = createInterface({ input: process.stdin });
+/** Serve MCP over a line stream until it closes (stdio by default). */
+export async function serveMcp(
+  deps: McpDeps,
+  input: Readable = process.stdin,
+  output: Writable = process.stdout,
+): Promise<void> {
+  const lines = createInterface({ input });
   for await (const line of lines) {
     if (line.trim().length === 0) continue;
     const response = await handleMcpRequest(line, deps);
-    if (response !== undefined) process.stdout.write(`${response}\n`);
+    if (response !== undefined) output.write(`${response}\n`);
   }
 }

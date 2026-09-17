@@ -5,10 +5,8 @@
 // uses lets the test import the shim without adding a runtime dependency.
 declare module "@earendil-works/pi-coding-agent" {
   export interface ToolParams {
-    readonly state: import("effect/Schema").Schema.Type<typeof import("effect/Schema").Schema.Json>;
-    readonly questions: import("effect/Schema").Schema.Type<
-      typeof import("effect/Schema").Schema.Json
-    >;
+    readonly state: string;
+    readonly questions: string;
     readonly model?: string;
   }
 

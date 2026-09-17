@@ -80,6 +80,37 @@ describe("session digests", () => {
     expect(digest?.costUsd).toBe(0.25);
   });
 
+  it("digests Claude user entries whose content is an array", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-claude-"));
+    await writeFile(
+      join(dir, "claude-array.jsonl"),
+      [
+        JSON.stringify({ type: "session", timestamp: "2026-09-16T10:00:00.000Z" }),
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-09-16T10:01:00.000Z",
+          message: {
+            content: [
+              { type: "tool_result", is_error: true, text: "boom" },
+              { type: "text", text: "analyze the risks" },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-09-16T10:02:00.000Z",
+          message: { content: [{ type: "text", text: "done" }] },
+        }),
+      ].join("\n"),
+    );
+
+    const digests = await Effect.runPromise(digestClaude(dir, "2026-09-16T00:00:00.000Z"));
+
+    expect(digests).toHaveLength(1);
+    expect(digests[0]?.userPrompts.join(" ")).toContain("analyze the risks");
+    expect(digests[0]?.errorCount).toBe(1);
+  });
+
   it("propagates non-ENOENT pi root failures and accepts a missing root", async () => {
     const missing = await Effect.runPromise(
       digestPiOmp([{ harness: "pi", root: join(fixturesDir, "absent") }], since),

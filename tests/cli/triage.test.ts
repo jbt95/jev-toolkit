@@ -126,6 +126,26 @@ describe("jev triage", () => {
     expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain("failure class:");
   });
 
+  it("resolves a repeat failure to an earlier fingerprint through Jev", async () => {
+    const path = await tempEventsPath();
+    const layers = cliLayers(path, failureRespond());
+    const _logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await Effect.runPromise(
+      runCli(["triage", "failure"], layers, () => Effect.succeed("failure A")),
+    );
+    const code = await Effect.runPromise(
+      runCli(["triage", "failure"], layers, () => Effect.succeed("failure B")),
+    );
+
+    expect(code).toBe(0);
+    const triageEvents = (await Effect.runPromise(makeEventLog(path).read())).filter(
+      (event) => event._tag === "triage",
+    );
+    const last = triageEvents[triageEvents.length - 1];
+    if (last?._tag === "triage") expect(last.summary.repeats).toBe(2);
+  });
+
   it("fails when the transcript has no failing entry", async () => {
     const file = await writeTempFile(
       "transcript.jsonl",

@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
+import { PassThrough } from "node:stream";
 import { JevConfigError, type AskInput, type AskResult } from "@/core/client.ts";
-import { createMcpDeps, handleMcpRequest, type JsonValue, type McpDeps } from "@/mcp/server.ts";
+import {
+  createMcpDeps,
+  handleMcpRequest,
+  serveMcp,
+  type JsonValue,
+  type McpDeps,
+} from "@/mcp/server.ts";
 
 const depsWith = (call: McpDeps["call"]): McpDeps => ({ call });
 
@@ -155,5 +162,31 @@ describe("MCP server", () => {
     });
 
     expect(seen[0]?.sessionID).toBe("ses_attributed");
+  });
+
+  it("serves request lines over the provided streams until close", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk) => {
+      written += String(chunk);
+    });
+    const served = serveMcp(
+      depsWith(async () => ({ ok: true, text: "done" })),
+      input,
+      output,
+    );
+
+    input.write('{"jsonrpc":"2.0","id":1,"method":"ping"}\n');
+    input.write("\n");
+    input.write(
+      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"typesafe_ask","arguments":{"state":"x","questions":{}}}}\n',
+    );
+    input.end();
+    await served;
+
+    expect(written).toContain('"id":1');
+    expect(written).toContain('"id":2');
+    expect(written).toContain("done");
   });
 });

@@ -110,7 +110,8 @@ describe("jev audit", () => {
 
   it("summarizes regex tagging versus Jev detection for real prompts", async () => {
     const db = await makeOpencodeDb();
-    db.insertMessage("p1", "user", Date.now() - 1000, "Should we ship now?");
+    db.insertMessage("p1", "user", Date.now() - 1000, "no regex pattern here");
+    db.insertMessage("p2", "user", Date.now() - 999, "Should we ship now?");
     process.env.JEV_OPENCODE_DB = db.path;
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -120,9 +121,11 @@ describe("jev audit", () => {
 
     expect(code).toBe(0);
     const output = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(output).toContain("prompts=1");
+    expect(output).toContain("prompts=2");
     expect(output).toContain("jev_detected=1");
+    expect(output).toContain("missed by regex (examples):");
     expect(output).toContain("routed by Jev (examples):");
+    expect(output).toContain("regex-tagged but not routed by Jev (examples):");
   });
 
   it("rejects an unknown audit subcommand", async () => {

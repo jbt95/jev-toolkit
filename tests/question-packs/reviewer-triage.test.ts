@@ -94,6 +94,22 @@ describe("reviewer triage", () => {
     expect(routed.cosmetic).toEqual([]);
   });
 
+  it("routes a confident, low-severity finding to cosmetic", () => {
+    const answers: AnswerMap = {
+      f_f2_class: {
+        _tag: "choice",
+        choice: "cosmetic",
+        confidence: 0.9,
+        probabilities: { cosmetic: 0.9 },
+      },
+    };
+
+    const routed = routeTriage(findings, answers);
+
+    expect(routed.cosmetic.map((finding) => finding.id)).toEqual(["f2"]);
+    expect(routed.questions.map((finding) => finding.id)).toEqual(["f1"]);
+  });
+
   it("rejects duplicate finding ids at the decode boundary", () => {
     const decode = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewInput));
     const duplicate = decode(

@@ -89,7 +89,7 @@ describe("pi/omp extension", () => {
       const harness = loadHarness();
       const result = await harness.tool.execute("call-1", {
         state: "text",
-        questions: { q1: { _tag: "noul" } },
+        questions: '{"q1":{"_tag":"noul"}}',
       });
 
       expect(result.content[0]?.text).toContain("p(yes)=0.99");
@@ -103,10 +103,10 @@ describe("pi/omp extension", () => {
 
     await withPath(binDir, async () => {
       process.env.JEV_HARNESS = "omp";
-      await loadHarness().tool.execute("call-2", { state: "x", questions: {} });
+      await loadHarness().tool.execute("call-2", { state: "x", questions: "{}" });
       delete process.env.JEV_HARNESS;
       process.env.OMPCODE = "1";
-      await loadHarness().tool.execute("call-3", { state: "x", questions: {} });
+      await loadHarness().tool.execute("call-3", { state: "x", questions: "{}" });
     });
 
     const log = await readFile(logPath, "utf8");
@@ -118,7 +118,7 @@ describe("pi/omp extension", () => {
     process.env.JEV_HARNESS = "pi";
 
     await withPath(binDir, async () => {
-      const result = await loadHarness().tool.execute("call-4", { state: "x", questions: {} });
+      const result = await loadHarness().tool.execute("call-4", { state: "x", questions: "{}" });
       expect(result.content[0]?.text).toContain("jev ask failed");
     });
   });
