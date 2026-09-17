@@ -17,6 +17,12 @@ import {
   type RawOpportunity,
 } from "../audit/opportunities.ts";
 import {
+  digestClaude,
+  digestOpencode,
+  digestPiOmp,
+  type SessionDigest,
+} from "../audit/sessions.ts";
+import {
   JevClient,
   JevClientLive,
   createFetchTransport,
@@ -42,6 +48,7 @@ import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
 import { clip, failureQuestions, redact } from "../question-packs/failure-triage.ts";
 import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
+import { labelQuestions } from "../question-packs/session-labeling.ts";
 
 const AskPayload = Schema.Struct({
   state: Schema.Json,
@@ -65,6 +72,7 @@ commands:
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     Claude Code hooks: jev hook prompt
   check    commit conformance: jev check commit --message-file FILE
+  label    session labeling: jev label sessions [--since 24h] [--dry-run]
   triage   classify failures or review findings: jev triage failure | review
   mcp      stdio MCP server exposing typesafe_ask (single tool surface)
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
@@ -278,6 +286,105 @@ export function runCli(
         }
         yield* Effect.sync(() => {
           printAuditSummary(correlated, dryRun);
+        });
+        return 0;
+      }
+      case "label": {
+        if (rest[0] !== "sessions") {
+          yield* Effect.sync(() => {
+            console.error(
+              "usage: jev label sessions [--since 24h] [--harness all] [--limit 50] [--dry-run]",
+            );
+          });
+          return 1;
+        }
+        const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
+        const harnessFlag = flag(rest, "--harness") ?? "all";
+        const requested = Number.parseInt(flag(rest, "--limit") ?? "50", 10);
+        const limit = Number.isNaN(requested) ? 50 : requested;
+        const dryRun = rest.includes("--dry-run");
+        const now = yield* Clock.currentTimeMillis;
+        const sinceIso = new Date(now - sinceMs).toISOString();
+        const wants = (harness: string): boolean =>
+          harnessFlag === "all" || harnessFlag === harness;
+
+        const collected: Array<SessionDigest> = [];
+        if (wants("opencode2")) {
+          collected.push(
+            ...(yield* digestOpencode(opencodeDbPath(), sinceIso).pipe(
+              Effect.mapError((error) => `session digest failed: ${error.source}`),
+            )),
+          );
+        }
+        if (wants("claude-code")) {
+          collected.push(
+            ...(yield* digestClaude(claudeProjectsDir(), sinceIso).pipe(
+              Effect.mapError((error) => `session digest failed: ${error.source}`),
+            )),
+          );
+        }
+        const piOmpRoots = [
+          { harness: "pi" as const, root: piSessionsDir() },
+          { harness: "omp" as const, root: ompSessionsDir() },
+        ].filter((entry) => wants(entry.harness));
+        if (piOmpRoots.length > 0) {
+          collected.push(
+            ...(yield* digestPiOmp(piOmpRoots, sinceIso).pipe(
+              Effect.mapError((error) => `session digest failed: ${error.source}`),
+            )),
+          );
+        }
+        const digests = collected.slice(0, limit);
+        if (dryRun) {
+          yield* Effect.sync(() => {
+            console.log(JSON.stringify({ sessions: digests }, null, 2));
+          });
+          return 0;
+        }
+
+        const client = yield* JevClient;
+        const log = yield* EventLog;
+        const harness = harnessFromEnv("script");
+        const outcomeValues = ["shipped", "blocked", "abandoned", "ongoing"] as const;
+        const wasteValues = ["none", "loop", "truncation", "retries", "waiting_on_human"] as const;
+        const pickOutcome = (value: string | undefined): (typeof outcomeValues)[number] =>
+          outcomeValues.find((candidate) => candidate === value) ?? "ongoing";
+        const pickWaste = (value: string | undefined): (typeof wasteValues)[number] =>
+          wasteValues.find((candidate) => candidate === value) ?? "none";
+
+        let labeled = 0;
+        for (let start = 0; start < digests.length; start += 10) {
+          const batch = digests.slice(start, start + 10);
+          const result = yield* client
+            .ask({ harness, state: { sessions: batch }, questions: labelQuestions(batch) })
+            .pipe(Effect.mapError(describeJevError));
+          for (let index = 0; index < batch.length; index++) {
+            const digest = batch[index];
+            if (digest === undefined) continue;
+            const outcomeAnswer = result.answers[`s${index}_outcome`];
+            const frictionAnswer = result.answers[`s${index}_friction`];
+            const wasteAnswer = result.answers[`s${index}_waste`];
+            const taskAnswer = result.answers["task_type"];
+            const eventTime = yield* Clock.currentTimeMillis;
+            yield* log
+              .append({
+                _tag: "session_label",
+                ts: new Date(eventTime).toISOString(),
+                harness: digest.harness,
+                sessionID: digest.sessionID,
+                outcome: pickOutcome(
+                  outcomeAnswer?._tag === "choice" ? outcomeAnswer.choice : undefined,
+                ),
+                friction: frictionAnswer?._tag === "score" ? frictionAnswer.score : 0,
+                waste: pickWaste(wasteAnswer?._tag === "choice" ? wasteAnswer.choice : undefined),
+                taskType: taskAnswer?._tag === "choice" ? taskAnswer.choice : "other",
+              })
+              .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+            labeled += 1;
+          }
+        }
+        yield* Effect.sync(() => {
+          console.log(`labeled ${labeled} of ${digests.length} candidate sessions`);
         });
         return 0;
       }

@@ -19,6 +19,7 @@ export interface MetricsSnapshot {
 
 const CONFIDENCE_BUCKETS = [0.5, 0.7, 0.8, 0.9, 0.95, 0.99, 1] as const;
 const LATENCY_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10] as const;
+const FRICTION_BUCKETS = [1, 2, 3, 4, 5] as const;
 
 type LabelPairs = ReadonlyArray<readonly [string, string]>;
 
@@ -79,6 +80,9 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
   const triage = new Map<string, number>();
   const latency = new Map<string, Histogram>();
   const confidence = new Map<string, Histogram>();
+  const sessionOutcomes = new Map<string, number>();
+  const sessionWaste = new Map<string, number>();
+  const sessionFriction = new Map<string, Histogram>();
 
   for (const event of events) {
     switch (event._tag) {
@@ -123,6 +127,14 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
         break;
       }
       case "session_label": {
+        const outcomeKey = `${event.harness}|${event.outcome}`;
+        sessionOutcomes.set(outcomeKey, (sessionOutcomes.get(outcomeKey) ?? 0) + 1);
+        const wasteKey = `${event.harness}|${event.waste}`;
+        sessionWaste.set(wasteKey, (sessionWaste.get(wasteKey) ?? 0) + 1);
+        const frictionHistogram =
+          sessionFriction.get(event.harness) ?? newHistogram(FRICTION_BUCKETS);
+        observe(frictionHistogram, FRICTION_BUCKETS, event.friction);
+        sessionFriction.set(event.harness, frictionHistogram);
         break;
       }
     }
@@ -251,6 +263,52 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
           "le",
           [["primitive", primitive]],
           CONFIDENCE_BUCKETS,
+          histogram,
+        ),
+      ),
+    },
+    {
+      name: "jev_sessions_total",
+      help: "Labeled sessions by harness and outcome.",
+      type: "counter",
+      lines: sorted(sessionOutcomes).map(([key, count]) => {
+        const [harness = "", outcome = ""] = key.split("|");
+        return sample(
+          "jev_sessions_total",
+          [
+            ["harness", harness],
+            ["outcome", outcome],
+          ],
+          count,
+        );
+      }),
+    },
+    {
+      name: "jev_waste_total",
+      help: "Labeled sessions by dominant waste pattern.",
+      type: "counter",
+      lines: sorted(sessionWaste).map(([key, count]) => {
+        const [harness = "", pattern = ""] = key.split("|");
+        return sample(
+          "jev_waste_total",
+          [
+            ["harness", harness],
+            ["pattern", pattern],
+          ],
+          count,
+        );
+      }),
+    },
+    {
+      name: "jev_session_friction",
+      help: "Session friction distribution by harness.",
+      type: "histogram",
+      lines: sorted(sessionFriction).flatMap(([harness, histogram]) =>
+        histogramLines(
+          "jev_session_friction",
+          "le",
+          [["harness", harness]],
+          FRICTION_BUCKETS,
           histogram,
         ),
       ),

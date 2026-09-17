@@ -1,0 +1,53 @@
+import type { SessionDigest } from "../audit/sessions.ts";
+import type { Question, QuestionMap } from "../core/schema.ts";
+
+/** Per digest: outcome, friction, waste. Batch-level: task type. */
+export function labelQuestions(digests: ReadonlyArray<SessionDigest>): QuestionMap {
+  const questions: Record<string, Question> = {};
+  digests.forEach((digest, index) => {
+    const label =
+      `Session ${index + 1} (${digest.harness}): ${digest.assistantTurns} assistant turns, ` +
+      `tools ${JSON.stringify(digest.toolCounts)}, errors ${digest.errorCount}; ` +
+      `the developer asked: ${digest.userPrompts.join(" | ") || "(no captured prompts)"}`;
+    questions[`s${index}_outcome`] = {
+      _tag: "choice",
+      instructions: `What was the outcome of this session? ${label}`,
+      criteria: {
+        shipped: "work completed and delivered",
+        blocked: "stopped by an unresolved blocker",
+        abandoned: "left unfinished without resolution",
+        ongoing: "still in progress",
+      },
+    };
+    questions[`s${index}_friction`] = {
+      _tag: "score",
+      instructions: `How much friction did the developer hit in this session? ${label}`,
+      criteria: ["None", "Minor", "Noticeable", "High", "Severe"],
+    };
+    questions[`s${index}_waste`] = {
+      _tag: "choice",
+      instructions: `What waste pattern dominated this session, if any? ${label}`,
+      criteria: {
+        none: "no notable waste",
+        loop: "repeated failing attempts at the same thing",
+        truncation: "stopped at a limit before finishing",
+        retries: "repeated retries of the same action",
+        waiting_on_human: "idled waiting for the developer",
+      },
+    };
+  });
+  questions["task_type"] = {
+    _tag: "choice",
+    instructions: "What kind of work did this batch of sessions cover overall?",
+    criteria: {
+      feature: "new capability",
+      fix: "bug fix",
+      review: "review or verification",
+      analysis: "investigation or measurement",
+      release: "release or integration",
+      content: "docs or content",
+      other: "other",
+    },
+  };
+  return questions;
+}

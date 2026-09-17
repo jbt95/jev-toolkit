@@ -70,6 +70,16 @@ const events: ReadonlyArray<JevEvent> = [
     feature: "failure",
     summary: { escalate: 0 },
   },
+  {
+    _tag: "session_label",
+    ts: "2026-09-17T00:07:00.000Z",
+    harness: "cli",
+    sessionID: "s1",
+    outcome: "shipped",
+    friction: 2,
+    waste: "none",
+    taskType: "feature",
+  },
 ];
 
 describe("metrics", () => {
@@ -101,6 +111,13 @@ describe("metrics", () => {
     expect(body).toContain('jev_latency_seconds_bucket{harness="cli",le="+Inf"} 3');
   });
 
+  it("aggregates session labels into outcome, waste, and friction series", () => {
+    expect(body).toContain('jev_sessions_total{harness="cli",outcome="shipped"} 1');
+    expect(body).toContain('jev_waste_total{harness="cli",pattern="none"} 1');
+    expect(body).toContain('jev_session_friction_count{harness="cli"} 1');
+    expect(body).toContain('jev_session_friction_bucket{harness="cli",le="+Inf"} 1');
+  });
+
   it("declares every family with HELP and TYPE", () => {
     for (const name of [
       "jev_calls_total",
@@ -111,6 +128,9 @@ describe("metrics", () => {
       "jev_triage_total",
       "jev_latency_seconds",
       "jev_confidence",
+      "jev_sessions_total",
+      "jev_waste_total",
+      "jev_session_friction",
     ]) {
       expect(body).toContain(`# TYPE ${name} `);
       expect(body).toContain(`# HELP ${name} `);
