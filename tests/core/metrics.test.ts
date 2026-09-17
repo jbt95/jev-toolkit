@@ -163,5 +163,13 @@ describe("metrics", () => {
 
     expect(relabeledBody).toContain('jev_labeled_sessions_total{harness="cli"} 1');
     expect(relabeledBody).toContain('jev_labeled_sessions_with_calls_total{harness="cli"} 1');
+    // The latest label wins for outcome, waste, and friction.
+    expect(relabeledBody).toContain('jev_sessions_total{harness="cli",outcome="ongoing"} 1');
+    expect(relabeledBody).not.toContain('outcome="shipped"');
+    expect(relabeledBody).toContain('jev_waste_total{harness="cli",pattern="loop"} 1');
+    expect(relabeledBody).not.toContain('pattern="none"');
+    expect(relabeledBody).toContain('jev_session_friction_count{harness="cli"} 1');
+    expect(relabeledBody).toContain('jev_session_friction_bucket{harness="cli",le="2"} 0');
+    expect(relabeledBody).toContain('jev_session_friction_bucket{harness="cli",le="3"} 1');
   });
 });

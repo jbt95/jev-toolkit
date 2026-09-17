@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService } from "./events.ts";
-import type { JevEvent } from "./schema.ts";
+import type { JevEvent, SessionLabelEvent } from "./schema.ts";
 
 export class MeterError extends Data.TaggedError("MeterError")<{}> {}
 
@@ -85,6 +85,8 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
   const sessionOutcomes = new Map<string, number>();
   const sessionWaste = new Map<string, number>();
   const sessionFriction = new Map<string, Histogram>();
+  const latestLabel = new Map<string, SessionLabelEvent>();
+  const anonymousLabels: Array<SessionLabelEvent> = [];
 
   for (const event of events) {
     switch (event._tag) {
@@ -137,18 +139,26 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
           const set = labeledSessions.get(event.harness) ?? new Set<string>();
           set.add(labeledSession.value);
           labeledSessions.set(event.harness, set);
+          // Re-labeling overwrites: outcome/waste/friction follow the latest label.
+          latestLabel.set(`${event.harness}|${labeledSession.value}`, event);
+        } else {
+          anonymousLabels.push(event);
         }
-        const outcomeKey = `${event.harness}|${event.outcome}`;
-        sessionOutcomes.set(outcomeKey, (sessionOutcomes.get(outcomeKey) ?? 0) + 1);
-        const wasteKey = `${event.harness}|${event.waste}`;
-        sessionWaste.set(wasteKey, (sessionWaste.get(wasteKey) ?? 0) + 1);
-        const frictionHistogram =
-          sessionFriction.get(event.harness) ?? newHistogram(FRICTION_BUCKETS);
-        observe(frictionHistogram, FRICTION_BUCKETS, event.friction);
-        sessionFriction.set(event.harness, frictionHistogram);
         break;
       }
     }
+  }
+
+  // One observation per labeled session (latest label wins); labels without a
+  // session ID cannot be deduped and stay per-event.
+  for (const label of [...latestLabel.values(), ...anonymousLabels]) {
+    const outcomeKey = `${label.harness}|${label.outcome}`;
+    sessionOutcomes.set(outcomeKey, (sessionOutcomes.get(outcomeKey) ?? 0) + 1);
+    const wasteKey = `${label.harness}|${label.waste}`;
+    sessionWaste.set(wasteKey, (sessionWaste.get(wasteKey) ?? 0) + 1);
+    const frictionHistogram = sessionFriction.get(label.harness) ?? newHistogram(FRICTION_BUCKETS);
+    observe(frictionHistogram, FRICTION_BUCKETS, label.friction);
+    sessionFriction.set(label.harness, frictionHistogram);
   }
 
   const families: Array<MetricFamily> = [
