@@ -38,6 +38,7 @@ import {
 import { Harness, QuestionMap } from "../core/schema.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { clip, failureQuestions, redact } from "../question-packs/failure-triage.ts";
+import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
 
 const AskPayload = Schema.Struct({
   state: Schema.Json,
@@ -60,7 +61,7 @@ commands:
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     Claude Code hooks: jev hook prompt
-  triage   classify failures and break loops: jev triage failure [--transcript FILE]
+  triage   classify failures or review findings: jev triage failure | review
   mcp      stdio MCP server exposing typesafe_ask (single tool surface)
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
@@ -253,10 +254,64 @@ export function runCli(
         return 0;
       }
       case "triage": {
+        if (rest[0] === "review") {
+          const inputFlag = flag(rest, "--input");
+          if (inputFlag === undefined) {
+            yield* Effect.sync(() => {
+              console.error("usage: jev triage review --input findings.json");
+            });
+            return 1;
+          }
+          const client = yield* JevClient;
+          const log = yield* EventLog;
+          const harness = harnessFromEnv("cli");
+          const raw = yield* Effect.tryPromise({
+            try: () => readFile(inputFlag, "utf8"),
+            catch: () => `cannot read findings file: ${inputFlag}`,
+          });
+          const review = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewInput))(
+            raw,
+          ).pipe(
+            Effect.mapError(
+              () =>
+                "invalid findings JSON: expected { findings: [{ id, title, detail, file?, line? }] }",
+            ),
+          );
+          const findings = review.findings;
+          const sanitized = findings.map((finding) => ({
+            ...finding,
+            detail: clip(redact(finding.detail)),
+          }));
+          const result = yield* client
+            .ask({ harness, state: { findings: sanitized }, questions: reviewQuestions(sanitized) })
+            .pipe(Effect.mapError(describeJevError));
+          const routed = routeTriage(findings, result.answers);
+          const now = yield* Clock.currentTimeMillis;
+          yield* log
+            .append({
+              _tag: "triage",
+              ts: new Date(now).toISOString(),
+              harness,
+              feature: "review",
+              summary: {
+                findings: findings.length,
+                blockers: routed.blockers.length,
+                cosmetic: routed.cosmetic.length,
+                questions: routed.questions.length,
+                substantive: routed.reviewSubstantive ? 1 : 0,
+                truncated: routed.truncated ? 1 : 0,
+              },
+            })
+            .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+          yield* Effect.sync(() => {
+            console.log(JSON.stringify(routed, null, 2));
+          });
+          return 0;
+        }
         if (rest[0] !== "failure") {
           yield* Effect.sync(() => {
             console.error(
-              "usage: jev triage failure [--text FILE|-] [--transcript FILE]   (default: read stdin)",
+              "usage: jev triage failure [--text FILE|-] [--transcript FILE] | jev triage review --input findings.json",
             );
           });
           return 1;
