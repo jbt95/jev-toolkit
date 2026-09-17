@@ -1,0 +1,14 @@
+#!/bin/sh
+# Sample commit-msg hook: non-blocking by default (prints the verdict only),
+# mirror the exit code when JEV_COMMIT_GATE=block.
+# Install: copy or symlink into .git/hooks/commit-msg, or set core.hooksPath.
+set -u
+command -v jev >/dev/null 2>&1 || exit 0
+out=$(JEV_HARNESS=script jev check commit --message-file "$1" 2>/dev/null)
+rc=$?
+[ -n "$out" ] || exit 0
+printf '%s\n' "$out"
+if [ "${JEV_COMMIT_GATE:-warn}" = "block" ]; then
+  exit "$rc"
+fi
+exit 0

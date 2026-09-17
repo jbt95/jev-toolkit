@@ -3,9 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   correlate,
   extractClaude,
@@ -37,6 +39,7 @@ import {
 } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
+import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
 import { clip, failureQuestions, redact } from "../question-packs/failure-triage.ts";
 import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
 
@@ -61,6 +64,7 @@ commands:
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     Claude Code hooks: jev hook prompt
+  check    commit conformance: jev check commit --message-file FILE
   triage   classify failures or review findings: jev triage failure | review
   mcp      stdio MCP server exposing typesafe_ask (single tool surface)
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
@@ -124,6 +128,30 @@ const extractTranscriptFailure = (raw: string): string => {
     if (line.includes('"is_error":true') || line.includes('"is_error": true')) return line;
   }
   return "";
+};
+
+const execFileAsync = promisify(execFile);
+
+interface GitCommit {
+  readonly hash: string;
+  readonly subject: string;
+  readonly body: string;
+}
+
+const gitLog = async (repo: string, count: number): Promise<ReadonlyArray<GitCommit>> => {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["log", `-${count}`, "--pretty=format:%H%x1f%s%x1f%B%x1e"],
+    { cwd: repo, maxBuffer: 4 * 1024 * 1024 },
+  );
+  return stdout
+    .split("\x1e")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const [hash = "", subject = "", body = ""] = entry.split("\x1f");
+      return { hash, subject, body };
+    });
 };
 
 /** Harness id from JEV_HARNESS when valid, else the fallback. */
@@ -252,6 +280,84 @@ export function runCli(
           printAuditSummary(correlated, dryRun);
         });
         return 0;
+      }
+      case "check": {
+        if (rest[0] !== "commit") {
+          yield* Effect.sync(() => {
+            console.error(
+              "usage: jev check commit --message-file FILE | jev check commit --replay N [--repo DIR]",
+            );
+          });
+          return 1;
+        }
+        const client = yield* JevClient;
+        const log = yield* EventLog;
+        const harness = harnessFromEnv("script");
+        const replayFlag = flag(rest, "--replay");
+        if (replayFlag !== undefined) {
+          const requested = Number.parseInt(replayFlag, 10);
+          const count = Number.isNaN(requested) ? 10 : requested;
+          const repo = flag(rest, "--repo") ?? ".";
+          const commits = yield* Effect.tryPromise({
+            try: () => gitLog(repo, count),
+            catch: () => `git log failed in ${repo}`,
+          });
+          for (const commit of commits) {
+            const message = `${commit.subject}\n${commit.body}`;
+            const result = yield* client
+              .ask({ harness, state: { message }, questions: commitQuestions({ message }) })
+              .pipe(Effect.mapError(describeJevError));
+            const verdict = verdictFor({ message, answers: result.answers });
+            const now = yield* Clock.currentTimeMillis;
+            yield* log
+              .append({
+                _tag: "triage",
+                ts: new Date(now).toISOString(),
+                harness,
+                feature: "commit",
+                summary: { passed: verdict.passed ? 1 : 0, failed: verdict.failed.length },
+              })
+              .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+            yield* Effect.sync(() => {
+              const reasons =
+                verdict.failed.length > 0 ? ` failed: ${verdict.failed.join(", ")}` : "";
+              console.log(`${commit.hash.slice(0, 8)} pass=${verdict.passed}${reasons}`);
+            });
+          }
+          return 0;
+        }
+        const messageFile = flag(rest, "--message-file");
+        if (messageFile === undefined) {
+          yield* Effect.sync(() => {
+            console.error(
+              "usage: jev check commit --message-file FILE | jev check commit --replay N [--repo DIR]",
+            );
+          });
+          return 1;
+        }
+        const message = yield* Effect.tryPromise({
+          try: () => readFile(messageFile, "utf8"),
+          catch: () => `cannot read message file: ${messageFile}`,
+        });
+        const result = yield* client
+          .ask({ harness, state: { message }, questions: commitQuestions({ message }) })
+          .pipe(Effect.mapError(describeJevError));
+        const verdict = verdictFor({ message, answers: result.answers });
+        const now = yield* Clock.currentTimeMillis;
+        yield* log
+          .append({
+            _tag: "triage",
+            ts: new Date(now).toISOString(),
+            harness,
+            feature: "commit",
+            summary: { passed: verdict.passed ? 1 : 0, failed: verdict.failed.length },
+          })
+          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+        yield* Effect.sync(() => {
+          console.log(`pass: ${verdict.passed}`);
+          if (verdict.failed.length > 0) console.log(`failed: ${verdict.failed.join(", ")}`);
+        });
+        return verdict.passed ? 0 : 1;
       }
       case "triage": {
         if (rest[0] === "review") {

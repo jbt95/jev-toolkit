@@ -1,0 +1,4 @@
+refactor(cli): split the ask pipeline
+
+The ask case had grown into a switch of its own; extracting the
+pipeline keeps each subcommand readable. Verified with the CLI suite.

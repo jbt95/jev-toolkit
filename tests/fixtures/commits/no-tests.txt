@@ -1,0 +1,3 @@
+test(loops): cover the escalation edge
+
+Adds a regression test for the third-identical-failure escalation.
