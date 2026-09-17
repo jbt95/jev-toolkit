@@ -17,18 +17,31 @@ const LoopRecord = Schema.Struct({
   count: Schema.Number,
   lastTs: Schema.Number,
   escalated: Schema.Boolean,
+  sample: Schema.optional(Schema.String),
 });
-type LoopRecordValue = Schema.Schema.Type<typeof LoopRecord>;
 const LoopState = Schema.Record(Schema.String, LoopRecord);
 const decodeState = Schema.decodeUnknownOption(Schema.fromJsonString(LoopState));
+
+interface LoopRecordValue {
+  count: number;
+  lastTs: number;
+  escalated: boolean;
+  sample?: string;
+}
 
 export interface LoopCheck {
   readonly count: number;
   readonly escalated: boolean;
 }
 
+export interface LoopRecent {
+  readonly fingerprint: string;
+  readonly sample: string;
+}
+
 export interface LoopGuardService {
-  readonly check: (fingerprint: string) => Effect.Effect<LoopCheck, LoopError>;
+  readonly check: (fingerprint: string, sample?: string) => Effect.Effect<LoopCheck, LoopError>;
+  readonly recent: (limit: number) => Effect.Effect<ReadonlyArray<LoopRecent>, LoopError>;
 }
 
 export class LoopGuard extends Context.Service<LoopGuard, LoopGuardService>()("jev/LoopGuard") {}
@@ -44,36 +57,72 @@ export const fingerprint = (text: string): string =>
     .slice(0, 12);
 
 export function makeLoopGuard(path: string): LoopGuardService {
-  const check = (fp: string): Effect.Effect<LoopCheck, LoopError> =>
+  const readState = (): Effect.Effect<Map<string, LoopRecordValue>, LoopError> =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
         catch: () => new LoopError({ operation: "read" }),
       }).pipe(Effect.orElseSucceed(() => "{}"));
       const decoded = decodeState(raw);
-      const state = new Map<string, LoopRecordValue>(
-        Option.isSome(decoded) ? Object.entries(decoded.value) : [],
-      );
+      const state = new Map<string, LoopRecordValue>();
+      if (Option.isSome(decoded)) {
+        for (const [key, value] of Object.entries(decoded.value)) {
+          const copy: LoopRecordValue = {
+            count: value.count,
+            lastTs: value.lastTs,
+            escalated: value.escalated,
+          };
+          if (value.sample !== undefined) copy.sample = value.sample;
+          state.set(key, copy);
+        }
+      }
+      return state;
+    });
+
+  const writeState = (state: Map<string, LoopRecordValue>): Effect.Effect<void, LoopError> =>
+    Effect.tryPromise({
+      try: async () => {
+        await mkdir(dirname(path), { recursive: true });
+        const tmp = `${path}.tmp`;
+        await writeFile(tmp, JSON.stringify(Object.fromEntries(state)));
+        await rename(tmp, path);
+      },
+      catch: () => new LoopError({ operation: "write" }),
+    });
+
+  const check = (fp: string, sample?: string): Effect.Effect<LoopCheck, LoopError> =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const state = yield* readState();
       for (const [key, record] of state) {
         if (now - record.lastTs > PRUNE_MS) state.delete(key);
       }
       const current = state.get(fp);
       const count = (current?.count ?? 0) + 1;
       const escalate = count >= ESCALATE_AT && !(current?.escalated ?? false);
-      state.set(fp, { count, lastTs: now, escalated: (current?.escalated ?? false) || escalate });
-      yield* Effect.tryPromise({
-        try: async () => {
-          await mkdir(dirname(path), { recursive: true });
-          const tmp = `${path}.tmp`;
-          await writeFile(tmp, JSON.stringify(Object.fromEntries(state)));
-          await rename(tmp, path);
-        },
-        catch: () => new LoopError({ operation: "write" }),
-      });
+      const record: LoopRecordValue = {
+        count,
+        lastTs: now,
+        escalated: (current?.escalated ?? false) || escalate,
+      };
+      const nextSample = sample ?? current?.sample;
+      if (nextSample !== undefined) record.sample = nextSample;
+      state.set(fp, record);
+      yield* writeState(state);
       return { count, escalated: escalate };
     });
-  return { check };
+
+  const recent = (limit: number): Effect.Effect<ReadonlyArray<LoopRecent>, LoopError> =>
+    Effect.gen(function* () {
+      const state = yield* readState();
+      return [...state.entries()]
+        .filter(([, record]) => record.sample !== undefined)
+        .sort(([, a], [, b]) => b.lastTs - a.lastTs)
+        .slice(0, limit)
+        .map(([fp, record]) => ({ fingerprint: fp, sample: record.sample ?? "" }));
+    });
+
+  return { check, recent };
 }
 
 export const LoopGuardLive = (path: string): Layer.Layer<LoopGuard> =>

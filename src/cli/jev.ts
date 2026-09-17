@@ -48,7 +48,7 @@ import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import { claimConfirmQuestions, confirmedIndexes } from "../question-packs/claim-confirmation.ts";
 import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
-import { failureQuestions } from "../question-packs/failure-triage.ts";
+import { failureQuestions, identityQuestions } from "../question-packs/failure-triage.ts";
 import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
 import { labelQuestions } from "../question-packs/session-labeling.ts";
 
@@ -664,8 +664,35 @@ export function runCli(
         }
 
         const fp = fingerprint(failureText);
+        const safeFailure = clip(redact(failureText));
+        const recent = yield* guard
+          .recent(5)
+          .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
+        const similar = recent.filter((entry) => entry.fingerprint !== fp);
+        let canonical = fp;
+        if (similar.length > 0) {
+          const selection = yield* client
+            .ask({
+              harness,
+              state: {
+                current: safeFailure.slice(0, 600),
+                recent: similar.map((entry) => ({
+                  fingerprint: entry.fingerprint,
+                  sample: entry.sample,
+                })),
+              },
+              questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
+            })
+            .pipe(Effect.mapError(describeJevError));
+          const answer = selection.answers["same_as"];
+          if (answer?._tag === "choice") {
+            const index = Number.parseInt(answer.choice.replace("recent_", ""), 10);
+            const matched = Number.isNaN(index) ? undefined : similar[index];
+            if (matched !== undefined) canonical = matched.fingerprint;
+          }
+        }
         const loop = yield* guard
-          .check(fp)
+          .check(canonical, safeFailure.slice(0, 400))
           .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
         const result = yield* client
           .ask({
@@ -708,7 +735,7 @@ export function runCli(
           }
           if (loop.escalated) {
             console.log(
-              `ESCALATE: repeated failure (${loop.count}x, fingerprint ${fp}) — fix the root cause or suppress this session explicitly`,
+              `ESCALATE: repeated failure (${loop.count}x, fingerprint ${canonical}) — fix the root cause or suppress this session explicitly`,
             );
           }
         });

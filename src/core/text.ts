@@ -3,7 +3,7 @@ const MAX_TEXT = 2000;
 /** Strip obvious credential shapes before any text leaves the machine. */
 export function redact(text: string): string {
   return text
-    .replace(/(authorization\s*:\s*)\S+/giu, "$1[redacted]")
+    .replace(/(authorization\s*:\s*)[^\r\n"']+/giu, "$1[redacted]")
     .replace(/([A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET)\s*=\s*)\S+/gu, "$1[redacted]");
 }
 

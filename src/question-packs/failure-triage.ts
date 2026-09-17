@@ -31,3 +31,29 @@ export function failureQuestions(input: FailureInput): QuestionMap {
     },
   };
 }
+
+export interface FailureIdentityInput {
+  readonly current: string;
+  readonly recent: ReadonlyArray<{ readonly fingerprint: string; readonly sample: string }>;
+}
+
+/**
+ * Hash misses usually mean wording drift, not a new problem. This selection
+ * lets the loop breaker count a drifted failure against its earlier record.
+ */
+export function identityQuestions(input: FailureIdentityInput): QuestionMap {
+  const criteria: Record<string, string> = {};
+  input.recent.forEach((entry, index) => {
+    criteria[`recent_${index}`] = `same as: "${entry.sample.slice(0, 120)}"`;
+  });
+  criteria["none"] = "a new, distinct failure";
+  return {
+    same_as: {
+      _tag: "choice",
+      instructions:
+        `Is the current failure the same underlying issue as any recently seen failure? ` +
+        `Current: "${input.current.slice(0, 300)}"`,
+      criteria,
+    },
+  };
+}

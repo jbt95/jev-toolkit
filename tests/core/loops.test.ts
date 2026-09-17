@@ -48,4 +48,17 @@ describe("loop guard", () => {
     expect(fingerprint("Error:  Boom\n")).toBe(fingerprint("error: boom"));
     expect(fingerprint("a")).not.toBe(fingerprint("b"));
   });
+
+  it("stores samples and reports recent failures newest first", async () => {
+    const guard = makeLoopGuard(await tempStatePath());
+    await Effect.runPromise(guard.check("fp-old", "old failure text"));
+    await Effect.runPromise(guard.check("fp-new", "new failure text"));
+    await Effect.runPromise(guard.check("fp-bare"));
+
+    const recent = await Effect.runPromise(guard.recent(5));
+
+    expect(recent.map((entry) => entry.fingerprint)).toEqual(["fp-new", "fp-old"]);
+    expect(recent[0]?.sample).toBe("new failure text");
+    expect(recent.map((entry) => entry.fingerprint)).not.toContain("fp-bare");
+  });
 });
