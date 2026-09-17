@@ -214,40 +214,10 @@ export const installFailingJev = async (): Promise<{
   return { binDir, logPath };
 };
 
-/** Poll a file until it contains the marker (or the timeout elapses). */
-export const waitForFileContains = async (
-  path: string,
-  marker: string,
-  timeoutMs = 5000,
-): Promise<boolean> => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const { readFile } = await import("node:fs/promises");
-      if ((await readFile(path, "utf8")).includes(marker)) return true;
-    } catch {
-      // file not created yet
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  return false;
-};
-
 /** Run fn with `dir` prepended to PATH, restoring PATH afterwards. */
 export const withPath = async <T>(dir: string, fn: () => Promise<T>): Promise<T> => {
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous ?? ""}`;
-  try {
-    return await fn();
-  } finally {
-    process.env.PATH = previous;
-  }
-};
-
-/** Run fn with PATH set to exactly `dir`, so no other executable resolves. */
-export const withIsolatedPath = async <T>(dir: string, fn: () => Promise<T>): Promise<T> => {
-  const previous = process.env.PATH;
-  process.env.PATH = dir;
   try {
     return await fn();
   } finally {

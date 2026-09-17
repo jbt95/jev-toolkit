@@ -1,33 +1,24 @@
 # jev-toolkit
 
-Multi-harness integration for [TypeSafe/Jev](https://docs.typesafe.ai) — the
-System One decision model. One repo, four harnesses (OpenCode2, Claude Code,
-Pi, OMP), one local event log, Prometheus impact metrics on the existing
-Grafana stack.
+MCP-first toolkit for [TypeSafe/Jev](https://docs.typesafe.ai) — the System
+One decision model. One stdio server (`jev mcp`) serves any MCP-capable
+harness, backed by one local event log and Prometheus impact metrics on the
+existing Grafana stack.
 
 Built as an **Effect** codebase (v4 RC): services with Layers, typed errors,
 Schema-validated boundaries, no runtime dependencies besides `effect`.
 
 ```mermaid
 flowchart LR
-  subgraph H["Harnesses"]
-    OC["OpenCode2"]
-    CC["Claude Code"]
-    PI["Pi"]
-    OMP["OMP"]
-    GH["git commit-msg"]
-  end
+  H["MCP clients<br/>any harness"]
   MCP["jev mcp<br/>typesafe_ask"]
-  TRIG["deterministic triggers<br/>context · failure hooks"]
-  CLI["jev CLI<br/>triage · check · audit · label"]
+  CLI["jev CLI<br/>hook · triage · check · audit · label"]
   API["TypeSafe API"]
   LOG[("events.jsonl<br/>local only")]
   METER["jev meter"]
   GRAF["Grafana · Jev Impact"]
 
-  OC & CC & PI & OMP --> MCP --> API
-  OC & CC & PI & OMP --> TRIG --> CLI
-  GH --> CLI
+  H --> MCP --> API
   CLI --> API
   MCP & CLI --> LOG --> METER --> GRAF
 ```
@@ -39,12 +30,11 @@ flowchart LR
 `probabilities`. `jev ask` is the same judgment over stdin for harnesses
 without MCP. Details in [docs/mcp.md](docs/mcp.md).
 
-**Deterministic triggers** — make Jev fire where instructions get ignored: a
-context hook that appends the Jev directive when the latest prompt raises a
-quantitative question and keeps the policy line in every model call, a
-tool-error hook that triages failures, and a warn-first git commit hook. The
-live trigger is a local regex; the audit's detection is model-first. Details in
-[docs/agent-integration-guide.md](docs/agent-integration-guide.md).
+**Deterministic triggers** — `jev hook prompt` prints the Jev directive when
+the latest prompt matches local claim patterns, and `jev triage failure`
+classifies failures with the loop breaker built in. The live trigger is a local
+regex; the audit's detection is model-first. Details in
+[docs/cli.md](docs/cli.md).
 
 **Triage packs** — reviewer findings (class · severity · evidence → blockers /
 cosmetic / questions, with an evidence floor), harness and CI failures
@@ -76,7 +66,8 @@ jev audit run --since 24h --dry-run   # what claims did agents make?
 jev meter serve                       # Prometheus on 127.0.0.1:8788
 ```
 
-Wire your harness: [docs/agent-integration-guide.md](docs/agent-integration-guide.md).
+Wire your harness: [docs/mcp.md](docs/mcp.md) — any stdio MCP client, `command:
+jev`, `args: ["mcp"]`.
 
 ### CLI at a glance
 
@@ -96,13 +87,12 @@ Wire your harness: [docs/agent-integration-guide.md](docs/agent-integration-guid
 
 ## Docs
 
-| Page                                                          | Covers                                                                                                           |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| [architecture.md](docs/architecture.md)                       | System map, call lifecycle, services, event schema, audit pipeline, loop breaker, privacy boundary, design rules |
-| [cli.md](docs/cli.md)                                         | Every command with flags, examples, outputs, exit codes, and flow diagrams                                       |
-| [mcp.md](docs/mcp.md)                                         | `typesafe_ask` protocol surface, tool schema, error contract, request lifecycle                                  |
-| [agent-integration-guide.md](docs/agent-integration-guide.md) | Per-harness install, trigger reference, troubleshooting, log-first policy                                        |
-| [metrics.md](docs/metrics.md)                                 | Metric catalogue, dashboard, launchd meter, smoke test                                                           |
+| Page                                    | Covers                                                                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [architecture.md](docs/architecture.md) | System map, call lifecycle, services, event schema, audit pipeline, loop breaker, privacy boundary, design rules |
+| [cli.md](docs/cli.md)                   | Every command with flags, examples, outputs, exit codes, and flow diagrams                                       |
+| [mcp.md](docs/mcp.md)                   | `typesafe_ask` protocol surface, tool schema, error contract, request lifecycle                                  |
+| [metrics.md](docs/metrics.md)           | Metric catalogue, dashboard, launchd meter, smoke test                                                           |
 
 ## Layout
 
@@ -113,7 +103,6 @@ src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | 
 src/question-packs/ detection, alignment, reviewer, failure, commit, session labels
 src/audit/          message extractors (opencode2 DB, claude projects, pi/omp logs)
 src/replay/         review-fixture capture/score measurement aid
-src/integrations/   opencode2 | claude-code | pi | omp | git-hooks
 tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
 launchd/            always-on meter plist

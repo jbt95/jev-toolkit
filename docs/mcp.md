@@ -1,7 +1,7 @@
 # MCP server (`jev mcp`)
 
 One stdio server, one tool: `typesafe_ask`. Every MCP-capable harness connects
-to the same process; native integrations only add triggers.
+to the same process.
 
 The server mirrors the shapes of `~/personal/leadline/src/mcp.rs`:
 version-echoing `initialize` (with an `instructions` field hosts inject),
@@ -11,15 +11,13 @@ JSON-RPC lines.
 ## Talk to it
 
 ```jsonc
-// opcode.jsonc — OpenCode2 (Claude Code declares the same server in its plugin)
+// Standard stdio server declaration; exact shape varies per client
 {
-  "mcp": {
-    "servers": {
-      "jev": {
-        "type": "local",
-        "command": ["jev", "mcp"],
-        "environment": { "JEV_HARNESS": "opencode2" }
-      }
+  "mcpServers": {
+    "jev": {
+      "command": "jev",
+      "args": ["mcp"],
+      "env": { "JEV_HARNESS": "your-harness" }
     }
   }
 }

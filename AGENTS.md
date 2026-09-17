@@ -5,17 +5,12 @@
 - Runtime dependency: **`effect` 4.0.0-rc.112 only**, pinned exactly (mirrors
   `~/personal/creatorOS`). Everything else is a devDependency:
   `typescript` 5.9.2, `@types/node` 22.18.0, `vitest` 3.2.4, `oxlint` 1.81.0,
-  `@oxlint/plugins` 1.81.0, `oxfmt` 0.66.0. Harness SDKs are devDependencies
-  of their integration folders only.
+  `@oxlint/plugins` 1.81.0, `oxfmt` 0.66.0.
 - TypeScript strict, ESM, explicit `.ts` extensions
   (`allowImportingTsExtensions`), `verbatimModuleSyntax`, `isolatedModules`.
   No build step. Node >= 26.
-- Import paths: harness-loaded files are self-contained shims — import only the
-  harness SDK and shell out to the `jev` CLI for shared logic. Symlinked loaders
-  break repo-relative imports: OpenCode2's Bun loader resolves them against the
-  link path (`../../core/…` fails; verified 2026-09-17) and Pi's jiti does not
-  resolve them either. The `@/…` alias exists for tests and repo-internal
-  tooling only; the CLI runs on plain Node, which ignores tsconfig paths.
+- Import paths: the `@/…` alias exists for tests and repo-internal tooling
+  only; the CLI runs on plain Node, which ignores tsconfig paths.
 
 ## Effect rules (mirror ~/personal/creatorOS)
 
@@ -23,7 +18,7 @@
   platform APIs (`fetch`, `node:fs`, `node:http`, `node:sqlite`,
   `node:child_process`) with `Effect.tryPromise`/`Effect.try` and convert
   failures to typed errors at that boundary. `Effect.runPromise` only at host
-  entrypoints (CLI `main`, plugin/hook boundaries) and tests.
+  entrypoints (CLI `main`, hook boundaries) and tests.
 - Services: class-style `Context.Service` with exported `make*` constructors
   and Layer factories. Runtime code yields services from context; **only tests
   and composition roots import `make*`**

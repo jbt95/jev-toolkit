@@ -49,10 +49,10 @@ Notes on semantics:
 - **Compliance** is `matched / detected` from `opportunity` events written by
   `jev audit run`. Detection is model-first; unmatched claims are those whose
   session questions did not address them (or whose session made no Jev call).
-  Alignment needs `call` events that carry a `sessionID`; MCP cannot transport
-  one, so the OpenCode2 context hook injects the id and asks the model to pass
-  it as `sessionID` in each `typesafe_ask` call. Calls without an id cannot be
-  matched.
+  Alignment needs `call` events that carry a `sessionID`; `typesafe_ask` takes
+  an optional `sessionID` and the calling agent must pass the id its harness
+  provides. `jev audit run` infers the session for unattributed OpenCode2 calls
+  when the transcript allows it; other calls without an id cannot be matched.
 - **Sessions with calls** counts distinct `sessionID`s on `call` events —
   a session without a `sessionID` (some MCP clients) cannot be counted.
 - **Coverage** pairs labeled sessions with calls:

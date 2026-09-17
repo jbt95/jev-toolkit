@@ -39,7 +39,6 @@ Environment variables (see `core/paths.ts` and `core/client.ts`):
 | `JEV_HARNESS` | per-command default | Harness tag on events |
 | `JEV_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | Audit/label source |
 | `JEV_METER_PORT` | `8788` | Meter port |
-| `JEV_COMMIT_GATE` | `warn` | `commit-msg` hook: `block` mirrors the verdict exit code |
 | `JEV_METRICS_STACK` | `~/work/claude-code-metrics` | Dashboard install script |
 
 ## ask — raw judgment
@@ -85,8 +84,7 @@ flowchart TD
 Output lines: `failure class: <choice> (confidence N)`, `blocks_work:
 p(yes)=N`, `safe_to_suppress: p(yes)=N`, and `ESCALATE: …` at the third
 occurrence of the same fingerprint. Transcript mode passes only the selected
-failure text to the classifier — not the whole transcript. The Claude Code
-`Stop` hook filters this output to blocking or escalated failures only.
+failure text to the classifier — not the whole transcript.
 
 ## triage review — route review findings
 
@@ -137,8 +135,8 @@ also answers `p_<rule>` profile questions and the verdict only enforces the
 rules the documented spec imposes. Exit code `0` for pass, `1` for any failed
 check. `--replay` runs the check over the last N commits of `--repo`.
 
-The sample git hook (`src/integrations/git-hooks/commit-msg`) is warn-only by
-default and mirrors the exit code when `JEV_COMMIT_GATE=block`.
+Wire it into a `commit-msg` hook and mirror the exit code to gate commits;
+ignoring the code keeps the hook warn-only.
 
 ## audit run — claim detection and compliance
 
@@ -208,8 +206,8 @@ see [architecture.md](architecture.md#event-log) for the schema.
 
 Reads the harness hook payload (`{ "prompt": "…" }`) on stdin and prints
 `PROMPT_DIRECTIVE` when the local trigger matches, nothing otherwise. Always
-exits `0` and never blocks a prompt. Used by the Claude Code plugin and
-available for any harness with a prompt hook.
+exits `0` and never blocks a prompt. Available for any harness with a prompt
+hook.
 
 ## mcp — the single judgment surface
 

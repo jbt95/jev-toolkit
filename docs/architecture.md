@@ -1,29 +1,17 @@
 # Architecture
 
-How the pieces fit together: one judgment client, one event log, four harness
-surfaces, and a meter that turns the log into Prometheus series.
+How the pieces fit together: one judgment client, one MCP surface, one event
+log, and a meter that turns the log into Prometheus series.
 
 ## System map
 
 ```mermaid
 flowchart LR
-  subgraph harnesses["Harnesses"]
-    OC["OpenCode2"]
-    CC["Claude Code"]
-    PI["Pi"]
-    OMP["OMP"]
-    GH["git commit-msg"]
-  end
+  HARNESS["MCP-capable harness"]
 
   subgraph judgment["Judgment surface"]
     MCP["jev mcp<br/>typesafe_ask over stdio"]
     ASK["jev ask<br/>stdin fallback"]
-  end
-
-  subgraph triggers["Deterministic triggers"]
-    PROMPT["prompt directive"]
-    CONTEXT["context policy"]
-    FAIL["failure hook"]
   end
 
   subgraph operator["Operator CLI"]
@@ -40,26 +28,20 @@ flowchart LR
   PROM["Prometheus"]
   GRAF["Grafana · Jev Impact"]
 
-  OC & CC & PI & OMP --> MCP
-  OC & CC & PI & OMP --> triggers
-  triggers --> ASK
+  HARNESS --> MCP
   MCP --> CLIENT
   ASK --> CLIENT
   TRIAGE & CHECK & AUDIT & LABEL --> CLIENT
-  GH --> CHECK
   CLIENT --> API
   CLIENT --> LOG
-  AUDIT --> LOG
-  TRIAGE --> LOG
-  LABEL --> LOG
+  AUDIT & TRIAGE & LABEL --> LOG
   LOG --> METER --> PROM --> GRAF
 ```
 
 Two rules keep this small:
 
 1. **`typesafe_ask` lives once.** Every MCP-capable harness connects to the same
-   `jev mcp` server. Native integrations add only what MCP cannot: deterministic
-   triggers.
+   `jev mcp` server; local CLI commands are the only other callers.
 2. **Every judgment is logged.** The client appends to the event log before the
    answer is returned to the caller; a logging failure never fails the call.
 
@@ -238,11 +220,6 @@ flowchart LR
 - **Effect everywhere in core.** `Effect.Effect` returns, `Data.TaggedError`
   failures, services via `Context.Service` + Layers. Platform APIs (`fetch`,
   `node:fs`, `node:sqlite`) are wrapped at the boundary once.
-- **Self-contained harness shims.** Plugins and extensions import only their
-  harness SDK and delegate shared logic to the `jev` CLI (`hook prompt`,
-  `hook context`, `triage failure`); symlinked loaders resolve repo-relative
-  imports against the link path, so those fail. The `@/…` alias is for tests
-  and repo tooling only.
 - **Schema at every boundary.** JSONL lines, API responses, stdin payloads,
   transcripts, git output. Malformed input is skipped or failed explicitly.
 - **Log-first.** New triggers observe and record before they gate; only the

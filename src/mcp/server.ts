@@ -1,6 +1,6 @@
 // Stdio MCP server: one tool (`typesafe_ask`) behind newline-delimited
 // JSON-RPC 2.0. This is the single judgment surface for every MCP-capable
-// harness; native integrations only add triggers. Shapes mirror
+// harness. Shapes mirror
 // ~/personal/leadline/src/mcp.rs: version-echoing `initialize` (with an
 // `instructions` field hosts may inject), strict `tools/call` validation,
 // and text-content tool results. stdout carries only JSON-RPC lines.
