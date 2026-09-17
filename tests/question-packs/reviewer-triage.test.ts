@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AnswerMap } from "../core/schema.ts";
-import { reviewQuestions, routeTriage, type Finding } from "../question-packs/reviewer-triage.ts";
+import type { AnswerMap } from "@/core/schema.ts";
+import { reviewQuestions, routeTriage, type Finding } from "@/question-packs/reviewer-triage.ts";
 
 const findings: ReadonlyArray<Finding> = [
   {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { JevConfigError, type AskResult } from "../core/client.ts";
-import { createMcpDeps, handleMcpRequest, type JsonValue, type McpDeps } from "./server.ts";
+import { JevConfigError, type AskResult } from "@/core/client.ts";
+import { createMcpDeps, handleMcpRequest, type JsonValue, type McpDeps } from "@/mcp/server.ts";
 
 const depsWith = (call: McpDeps["call"]): McpDeps => ({ call });
 

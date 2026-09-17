@@ -3,11 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { join } from "node:path";
-import { runCli, type CliServices } from "../cli/jev.ts";
-import { JevClient, makeJevClient } from "../core/client.ts";
-import { EventLogLive, makeEventLog } from "../core/events.ts";
-import { LoopGuardLive } from "../core/loops.ts";
-import { makeTestTransport, tempEventsPath } from "../../tests/helpers.ts";
+import { runCli, type CliServices } from "@/cli/jev.ts";
+import { JevClient, makeJevClient } from "@/core/client.ts";
+import { EventLogLive, makeEventLog } from "@/core/events.ts";
+import { LoopGuardLive } from "@/core/loops.ts";
+import { makeTestTransport, tempEventsPath } from "../helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",

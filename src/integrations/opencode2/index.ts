@@ -13,8 +13,8 @@
 // plugin, so the repo keeps a single `effect` instance.
 import { Plugin } from "@opencode/plugin";
 import { execFile } from "node:child_process";
-import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../src/core/directives.ts";
-import { matchQuantitativeClaim } from "../../src/core/detector.ts";
+import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../core/directives.ts";
+import { matchQuantitativeClaim } from "../../core/detector.ts";
 
 /** Best-effort failure triage via the CLI; never blocks or throws. */
 const triageFailure = (text: string): void => {

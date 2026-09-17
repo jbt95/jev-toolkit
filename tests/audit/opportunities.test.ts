@@ -10,9 +10,9 @@ import {
   extractOpencode,
   extractPiOmp,
   type RawOpportunity,
-} from "./opportunities.ts";
+} from "@/audit/opportunities.ts";
 
-const fixturesDir = join(import.meta.dirname, "..", "..", "tests", "fixtures");
+const fixturesDir = join(import.meta.dirname, "..", "fixtures");
 const since = "2026-09-16T00:00:00.000Z";
 
 describe("audit extractors", () => {

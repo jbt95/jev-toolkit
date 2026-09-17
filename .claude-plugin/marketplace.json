@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "jev-toolkit",
-      "source": "./integrations/claude-code",
+      "source": "./src/integrations/claude-code",
       "description": "Deterministic Jev/TypeSafe judgments for coding agents."
     }
   ]

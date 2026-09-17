@@ -15,7 +15,7 @@ exposed as Prometheus metrics by `jev meter serve`.
 ## Install (development)
 
 ```console
-ln -sfn ~/personal/jev-toolkit/integrations/pi ~/.pi/agent/extensions/jev
+ln -sfn ~/personal/jev-toolkit/src/integrations/pi ~/.pi/agent/extensions/jev
 ```
 
 Restart Pi and confirm `typesafe_ask` is listed as an available tool.

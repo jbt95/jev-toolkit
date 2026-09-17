@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fingerprint, makeLoopGuard } from "../core/loops.ts";
+import { fingerprint, makeLoopGuard } from "@/core/loops.ts";
 
 const tempStatePath = async () =>
   join(await mkdtemp(join(tmpdir(), "jev-loop-")), "loop-state.json");

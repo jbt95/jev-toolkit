@@ -40,12 +40,12 @@ Add to the global `opencode.json(c)`:
    `@opencode/plugin` import resolves from this directory; relative `src/`
    imports work through symlinks, tsconfig aliases do not:
    ```console
-   cd ~/personal/jev-toolkit/integrations/opencode2 && bun install
+   cd ~/personal/jev-toolkit/src/integrations/opencode2 && bun install
    ```
 2. Link the plugin directory:
    ```console
    rm -rf ~/.config/opencode/plugins/typesafe
-   ln -sfn ~/personal/jev-toolkit/integrations/opencode2 ~/.config/opencode/plugins/typesafe
+   ln -sfn ~/personal/jev-toolkit/src/integrations/opencode2 ~/.config/opencode/plugins/typesafe
    ```
 3. Ensure `opencode.json(c)` lists `./plugins/typesafe/index.ts` in `plugins`
    (file-level entry, not the directory) and that `TYPESAFE_API_KEY` is

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchQuantitativeClaim } from "../core/detector.ts";
+import { matchQuantitativeClaim } from "@/core/detector.ts";
 
 describe("matchQuantitativeClaim", () => {
   it("matches percentages, probability words, rankings, estimates, and choices", () => {

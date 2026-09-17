@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { collect, render } from "../core/metrics.ts";
-import type { JevEvent } from "../core/schema.ts";
+import { collect, render } from "@/core/metrics.ts";
+import type { JevEvent } from "@/core/schema.ts";
 
 const events: ReadonlyArray<JevEvent> = [
   {

@@ -3,7 +3,7 @@ import { appendFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
-import { makeEventLog } from "../core/events.ts";
+import { makeEventLog } from "@/core/events.ts";
 
 const tempLogPath = async () => join(await mkdtemp(join(tmpdir(), "jev-test-")), "events.jsonl");
 

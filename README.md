@@ -46,7 +46,8 @@ src/mcp/server.ts   stdio MCP server (`jev mcp`) — the single judgment tool su
 src/cli/jev.ts      CLI: ask | events | meter | audit | triage | check | label | hook | mcp
 bin/jev             shim for ~/.local/bin
 src/question-packs/ reviewer triage, failure triage, commit conformance, labels
-integrations/       opencode2 | claude-code | pi | omp
+src/integrations/   opencode2 | claude-code | pi | omp (harness shims)
+tests/              all test files + fixtures
 dashboards/         canonical Grafana dashboard JSON + install script
 docs/superpowers/plans/  implementation plans
 ```

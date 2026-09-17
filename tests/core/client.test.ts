@@ -11,9 +11,9 @@ import {
   createFetchTransport,
   makeJevClient,
   type AskInput,
-} from "../core/client.ts";
-import { EventLogLive, makeEventLog } from "../core/events.ts";
-import { makeTestTransport, tempEventsPath } from "../../tests/helpers.ts";
+} from "@/core/client.ts";
+import { EventLogLive, makeEventLog } from "@/core/events.ts";
+import { makeTestTransport, tempEventsPath } from "../helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",

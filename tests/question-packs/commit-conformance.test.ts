@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AnswerMap } from "../core/schema.ts";
-import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
+import type { AnswerMap } from "@/core/schema.ts";
+import { commitQuestions, verdictFor } from "@/question-packs/commit-conformance.ts";
 
 const goodMessage =
   "feat(parser): reject mixed-indentation blocks\n\nMixed tabs and spaces made column math wrong, so blocks\nnow fail parsing with a clear error. Covered by parser tests.";

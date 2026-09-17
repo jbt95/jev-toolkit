@@ -32,7 +32,7 @@
   },
   "pi": {
     "extensions": [
-      "./integrations/pi/index.ts"
+      "./src/integrations/pi/index.ts"
     ]
   }
 }

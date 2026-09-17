@@ -54,22 +54,22 @@ Dashboard: `Jev Impact` (`http://localhost:3000/d/jev-impact`), provisioned in
 ## Per-harness install
 
 **OpenCode2** — MCP entry in the global `opencode.json(c)` plus the trigger
-shim plugin. See `integrations/opencode2/README.md`. After meter-code edits run
+shim plugin. See `src/integrations/opencode2/README.md`. After meter-code edits run
 `opencode2 service restart`; a stale plugin state clears on restart.
 
 **Claude Code** — `claude plugin marketplace add ~/personal/jev-toolkit` then
 `claude plugin install jev-toolkit@jev-toolkit`. The plugin ships the MCP
 declaration, the `UserPromptSubmit` directive hook, the Stop failure hook, and
 the `jev` skill. Reinstall after manifest changes; restart Claude Code.
-See `integrations/claude-code/README.md`.
+See `src/integrations/claude-code/README.md`.
 
-**Pi** — symlink `integrations/pi` into `~/.pi/agent/extensions/jev`. The
+**Pi** — symlink `src/integrations/pi` into `~/.pi/agent/extensions/jev`. The
 extension is self-contained (spawns `jev ask` / `jev triage failure`).
-See `integrations/pi/README.md`.
+See `src/integrations/pi/README.md`.
 
 **OMP** — `omp plugin install ~/personal/jev-toolkit` (root manifest declares
 `pi.extensions`); verify with `omp plugin doctor`. See
-`integrations/omp/README.md`.
+`src/integrations/omp/README.md`.
 
 ## Troubleshooting
 

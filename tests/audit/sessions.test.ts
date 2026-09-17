@@ -4,9 +4,9 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { digestClaude, digestOpencode, digestPiOmp } from "./sessions.ts";
+import { digestClaude, digestOpencode, digestPiOmp } from "@/audit/sessions.ts";
 
-const fixturesDir = join(import.meta.dirname, "..", "..", "tests", "fixtures");
+const fixturesDir = join(import.meta.dirname, "..", "fixtures");
 const since = "2026-09-16T00:00:00.000Z";
 
 describe("session digests", () => {
