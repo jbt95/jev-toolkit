@@ -241,6 +241,115 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
       "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Sessions per day by outcome",
+      "description": "Labeled agent sessions, stacked by Jev-assessed outcome.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(jev_sessions_total[1d]))",
+          "legendFormat": "{{outcome}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Waste patterns",
+      "description": "Dominant waste pattern per labeled session (loops, truncation, retries, waiting on human).",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (pattern) (increase(jev_waste_total[1d]))",
+          "legendFormat": "{{pattern}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Friction distribution",
+      "description": "Jev-assessed session friction, bucketed 1 (none) to 5 (severe).",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (le) (rate(jev_session_friction_bucket[$__rate_interval]))",
+          "legendFormat": "{{le}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Jev coverage (24h)",
+      "description": "Sessions with at least one Jev call over all labeled sessions.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.2 },
+              { "color": "green", "value": 0.5 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(jev_sessions_with_calls_total[24h])) / sum(increase(jev_sessions_total[24h]))",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
     }
   ]
 }

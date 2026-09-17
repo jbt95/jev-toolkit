@@ -22,6 +22,22 @@ Schema-validated boundaries, no runtime dependencies besides `effect`.
   `~/work/claude-code-metrics` and rendered as the `Jev Impact` dashboard at
   http://localhost:3000/d/jev-impact.
 
+## Usage
+
+```console
+jev ask                                  # {state, questions, model?} JSON on stdin
+jev triage failure --transcript FILE     # classify a failure; loop breaker built in
+jev triage review --input findings.json  # route review findings: blockers/cosmetic/questions
+jev check commit --message-file FILE     # commit conformance (also --replay N [--repo DIR])
+jev label sessions --since 24h           # label sessions: outcome / friction / waste
+jev audit run --since 24h                # detect quantitative claims agents made
+jev meter serve                          # Prometheus metrics on 127.0.0.1:8788
+jev mcp                                  # MCP server: the single typesafe_ask surface
+```
+
+See [docs/agent-integration-guide.md](docs/agent-integration-guide.md) for the
+event schema, metric catalogue, per-harness install, and troubleshooting.
+
 ## Layout
 
 ```
