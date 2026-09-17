@@ -1,6 +1,7 @@
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
@@ -30,7 +31,7 @@ export interface PiOmpRoot {
   readonly root: string;
 }
 
-const isString = Schema.is(Schema.String);
+const isString = Predicate.isString;
 const prompt = (text: string): string => clip(redact(text)).slice(0, 300);
 
 const ContentItem = Schema.Struct({

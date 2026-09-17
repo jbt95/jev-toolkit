@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 /**
@@ -26,7 +27,7 @@ const TranscriptEntry = Schema.Struct({
 });
 const decodeEntry = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptEntry));
 
-const isString = Schema.is(Schema.String);
+const isString = Predicate.isString;
 const isTextArray = Schema.is(
   Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.optional(Schema.String) })),
 );

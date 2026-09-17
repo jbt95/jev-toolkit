@@ -12,8 +12,10 @@
 // Outcome correlation (whether a following fix session touched the cited
 // files) is session-level and left to the operator; this tool reports Jev
 // classes only. It is a measurement aid, not a gate.
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { execFile } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
@@ -74,126 +76,157 @@ type ClassifyResult =
   | { readonly kind: "error"; readonly error: string }
   | { readonly kind: "routed"; readonly routed: Routed };
 
-const capture = async (date: string, outDir: string): Promise<void> => {
-  const start = Date.parse(`${date}T00:00:00.000Z`);
-  const end = start + 24 * 60 * 60 * 1000;
-  const db = new DatabaseSync(DEFAULT_DB, { readOnly: true });
-  let sessionRows;
-  try {
-    sessionRows = db
+const openDb = (path: string): Effect.Effect<DatabaseSync, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() => new DatabaseSync(path, { readOnly: true })),
+    (db) => Effect.sync(() => db.close()),
+  );
+
+const capture = (date: string, outDir: string): Effect.Effect<void, unknown, Scope.Scope> =>
+  Effect.gen(function* () {
+    const start = Date.parse(`${date}T00:00:00.000Z`);
+    const end = start + 24 * 60 * 60 * 1000;
+    const db = yield* openDb(DEFAULT_DB);
+    const sessionRows = db
       .prepare(
         "SELECT id, title, directory FROM session_v2 WHERE time_created >= ? AND time_created < ?",
       )
       .all(start, end);
-  } finally {
-    db.close();
-  }
-  await mkdir(outDir, { recursive: true });
-  let captured = 0;
-  for (const sessionRow of sessionRows) {
-    const decodedSession = decodeSessionRow(sessionRow);
-    if (Option.isNone(decodedSession)) continue;
-    const session = decodedSession.value;
-    if (!session.title.toLowerCase().includes("review")) continue;
-    const db2 = new DatabaseSync(DEFAULT_DB, { readOnly: true });
-    let messageRows;
-    try {
-      messageRows = db2
+    yield* Effect.tryPromise({
+      try: () => mkdir(outDir, { recursive: true }),
+      catch: (cause) => cause,
+    });
+    let captured = 0;
+    for (const sessionRow of sessionRows) {
+      const decodedSession = decodeSessionRow(sessionRow);
+      if (Option.isNone(decodedSession)) continue;
+      const session = decodedSession.value;
+      if (!session.title.toLowerCase().includes("review")) continue;
+      const messagesDb = yield* openDb(DEFAULT_DB);
+      const messageRows = messagesDb
         .prepare(
           "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq DESC LIMIT 5",
         )
         .all(session.id);
-    } finally {
-      db2.close();
-    }
-    const texts: Array<string> = [];
-    for (const messageRow of messageRows) {
-      const decodedRow = decodeMessageRow(messageRow);
-      if (Option.isNone(decodedRow)) continue;
-      const parsed = decodeMessage(decodedRow.value.data);
-      if (Option.isNone(parsed)) continue;
-      for (const part of parsed.value.content) {
-        const text = Option.fromUndefinedOr(part.text);
-        if (Option.isSome(text)) texts.push(text.value);
+      const texts: Array<string> = [];
+      for (const messageRow of messageRows) {
+        const decodedRow = decodeMessageRow(messageRow);
+        if (Option.isNone(decodedRow)) continue;
+        const parsed = decodeMessage(decodedRow.value.data);
+        if (Option.isNone(parsed)) continue;
+        for (const part of parsed.value.content) {
+          const text = Option.fromUndefinedOr(part.text);
+          if (Option.isSome(text)) texts.push(text.value);
+        }
       }
+      const findings = texts
+        .join("\n")
+        .split("\n")
+        .filter((line) => isFindingLine(line) && line.trim().length > 8)
+        .slice(0, 20)
+        .map(toFinding);
+      if (findings.length === 0) continue;
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(
+            join(outDir, `${session.id.slice(0, 24)}.json`),
+            JSON.stringify(
+              { meta: { sessionID: session.id, title: session.title }, findings },
+              null,
+              2,
+            ),
+          ),
+        catch: (cause) => cause,
+      });
+      captured += 1;
     }
-    const findings = texts
-      .join("\n")
-      .split("\n")
-      .filter((line) => isFindingLine(line) && line.trim().length > 8)
-      .slice(0, 20)
-      .map(toFinding);
-    if (findings.length === 0) continue;
-    await writeFile(
-      join(outDir, `${session.id.slice(0, 24)}.json`),
-      JSON.stringify({ meta: { sessionID: session.id, title: session.title }, findings }, null, 2),
-    );
-    captured += 1;
-  }
-  console.log(`captured ${captured} reviewer sessions into ${outDir}`);
-};
+    yield* Effect.sync(() => {
+      console.log(`captured ${captured} reviewer sessions into ${outDir}`);
+    });
+  });
 
-const classify = (inputPath: string): Promise<ClassifyResult> =>
-  new Promise((resolve) => {
+const classify = (inputPath: string): Effect.Effect<ClassifyResult> =>
+  Effect.callback<ClassifyResult>((resume) => {
     execFile(
       "jev",
       ["triage", "review", "--input", inputPath],
       { maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error !== null) {
-          resolve({
+          const failure: ClassifyResult = {
             kind: "error",
             error: stderr.trim().length > 0 ? stderr.trim() : error.message,
-          });
+          };
+          resume(Effect.succeed(failure));
           return;
         }
         const parsed = decodeRouted(stdout);
         if (Option.isNone(parsed)) {
-          resolve({ kind: "error", error: `unparseable output for ${inputPath}` });
+          const failure: ClassifyResult = {
+            kind: "error",
+            error: `unparseable output for ${inputPath}`,
+          };
+          resume(Effect.succeed(failure));
           return;
         }
-        resolve({ kind: "routed", routed: parsed.value });
+        const routed: ClassifyResult = { kind: "routed", routed: parsed.value };
+        resume(Effect.succeed(routed));
       },
     );
   });
 
-const score = async (dir: string): Promise<void> => {
-  const files = (await readdir(dir)).filter((name) => name.endsWith(".json"));
-  let blockers = 0;
-  let cosmetic = 0;
-  let questions = 0;
-  let truncated = 0;
-  for (const file of files) {
-    const result = await classify(join(dir, file));
-    if (result.kind === "error") {
-      console.log(`${file}: ERROR ${result.error.slice(0, 120)}`);
-      continue;
+const score = (dir: string): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const files = (yield* Effect.tryPromise({
+      try: () => readdir(dir),
+      catch: (cause) => cause,
+    })).filter((name) => name.endsWith(".json"));
+    let blockers = 0;
+    let cosmetic = 0;
+    let questions = 0;
+    let truncated = 0;
+    for (const file of files) {
+      const result = yield* classify(join(dir, file));
+      if (result.kind === "error") {
+        yield* Effect.sync(() => {
+          console.log(`${file}: ERROR ${result.error.slice(0, 120)}`);
+        });
+        continue;
+      }
+      const routed = result.routed;
+      blockers += routed.blockers.length;
+      cosmetic += routed.cosmetic.length;
+      questions += routed.questions.length;
+      if (routed.truncated) truncated += 1;
+      yield* Effect.sync(() => {
+        console.log(
+          `${file}: blockers=${routed.blockers.length} cosmetic=${routed.cosmetic.length} questions=${routed.questions.length} substantive=${routed.reviewSubstantive} truncated=${routed.truncated}`,
+        );
+      });
     }
-    const routed = result.routed;
-    blockers += routed.blockers.length;
-    cosmetic += routed.cosmetic.length;
-    questions += routed.questions.length;
-    if (routed.truncated) truncated += 1;
-    console.log(
-      `${file}: blockers=${routed.blockers.length} cosmetic=${routed.cosmetic.length} questions=${routed.questions.length} substantive=${routed.reviewSubstantive} truncated=${routed.truncated}`,
-    );
-  }
-  console.log(
-    `totals: fixtures=${files.length} blockers=${blockers} cosmetic=${cosmetic} questions=${questions} truncatedReviews=${truncated}`,
-  );
-};
+    const totals = `totals: fixtures=${files.length} blockers=${blockers} cosmetic=${cosmetic} questions=${questions} truncatedReviews=${truncated}`;
+    yield* Effect.sync(() => {
+      console.log(totals);
+    });
+  });
 
 const argv = process.argv.slice(2);
+let program: Effect.Effect<void, unknown>;
 if (argv.includes("--capture")) {
-  await capture(
-    flagValue(argv, "--date").pipe(Option.getOrElse(() => new Date().toISOString().slice(0, 10))),
-    flagValue(argv, "--out").pipe(Option.getOrElse(() => DEFAULT_OUT)),
+  program = Effect.scoped(
+    capture(
+      flagValue(argv, "--date").pipe(Option.getOrElse(() => new Date().toISOString().slice(0, 10))),
+      flagValue(argv, "--out").pipe(Option.getOrElse(() => DEFAULT_OUT)),
+    ),
   );
 } else if (argv.includes("--score")) {
-  await score(flagValue(argv, "--dir").pipe(Option.getOrElse(() => DEFAULT_OUT)));
+  program = score(flagValue(argv, "--dir").pipe(Option.getOrElse(() => DEFAULT_OUT)));
 } else {
-  console.error(
-    "usage: src/replay/review.ts --capture --date YYYY-MM-DD [--out DIR] | --score [--dir DIR]",
-  );
-  process.exitCode = 1;
+  program = Effect.sync(() => {
+    console.error(
+      "usage: src/replay/review.ts --capture --date YYYY-MM-DD [--out DIR] | --score [--dir DIR]",
+    );
+    process.exitCode = 1;
+  });
 }
+await Effect.runPromise(program);

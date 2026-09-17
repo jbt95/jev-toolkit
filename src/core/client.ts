@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { EventLog, type EventLogService } from "./events.ts";
@@ -278,17 +279,17 @@ export const JevClientLive = (config: JevClientConfig): Layer.Layer<JevClient, n
     }),
   );
 
+const formatAnswer = Match.type<Answer>().pipe(
+  Match.tag("noul", (answer) => `p(yes)=${answer.noul}`),
+  Match.tag("choice", (answer) => `${answer.choice} (confidence ${answer.confidence})`),
+  Match.tag("score", (answer) => `${answer.score} (confidence ${answer.confidence})`),
+  Match.exhaustive,
+);
+
 export function formatAnswers(result: AskResult): string {
-  const lines = Object.entries(result.answers).map(([id, answer]) => {
-    switch (answer._tag) {
-      case "noul":
-        return `${id}: p(yes)=${answer.noul}`;
-      case "choice":
-        return `${id}: ${answer.choice} (confidence ${answer.confidence})`;
-      case "score":
-        return `${id}: ${answer.score} (confidence ${answer.confidence})`;
-    }
-  });
+  const lines = Object.entries(result.answers).map(
+    ([id, answer]) => `${id}: ${formatAnswer(answer)}`,
+  );
   return [
     `jev ${result.model}`,
     ...lines,
