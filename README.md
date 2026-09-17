@@ -18,7 +18,7 @@ flowchart LR
     GH["git commit-msg"]
   end
   MCP["jev mcp<br/>typesafe_ask"]
-  TRIG["deterministic triggers<br/>prompt · context · failure hooks"]
+  TRIG["deterministic triggers<br/>context · failure hooks"]
   CLI["jev CLI<br/>triage · check · audit · label"]
   API["TypeSafe API"]
   LOG[("events.jsonl<br/>local only")]
@@ -40,10 +40,10 @@ flowchart LR
 without MCP. Details in [docs/mcp.md](docs/mcp.md).
 
 **Deterministic triggers** — make Jev fire where instructions get ignored: a
-prompt hook that appends the Jev directive when a quantitative question is
-detected, a context policy kept in every model call, a tool-error hook that
-triages failures, and a warn-first git commit hook. The live trigger is a
-local regex; the audit's detection is model-first. Details in
+context hook that appends the Jev directive when the latest prompt raises a
+quantitative question and keeps the policy line in every model call, a
+tool-error hook that triages failures, and a warn-first git commit hook. The
+live trigger is a local regex; the audit's detection is model-first. Details in
 [docs/agent-integration-guide.md](docs/agent-integration-guide.md).
 
 **Triage packs** — reviewer findings (class · severity · evidence → blockers /

@@ -9,9 +9,11 @@ Two parts, split by what each can do:
 
 - **Tool** — served by `jev mcp` (the single stdio MCP server shared by every
   harness); OpenCode connects through `mcp.servers.jev`.
-- **Triggers** — this plugin (hooks only): a prompt hook that appends the Jev
-  directive when a quantitative question is detected, and a context hook that
-  keeps the policy line in every model call. MCP cannot do either.
+- **Triggers** — this plugin (hooks only): a context hook that appends the Jev
+  directive when the latest prompt asks for a quantitative judgment and keeps
+  the policy line in every model call. MCP cannot do either. The V2 beta
+  (`0.0.0-beta-18269`) accepts a `prompt` hook registration but never
+  dispatches it (verified 2026-09-17), so the context hook carries both.
 
 ## Install the MCP tool
 

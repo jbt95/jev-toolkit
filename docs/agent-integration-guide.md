@@ -29,7 +29,7 @@ flowchart LR
 
   OC & CC -->|MCP| MCP
   PI & OMP -->|spawns CLI| ASK
-  OC -->|prompt · context hooks| HOOK
+  OC -->|context hook| HOOK
   CC -->|UserPromptSubmit| HOOK
   PI & OMP -->|input transform| HOOK
   OC -->|tool error hook| FAIL
@@ -38,7 +38,7 @@ flowchart LR
 
 | Harness | Judgment | Prompt trigger | Failure trigger |
 |---|---|---|---|
-| OpenCode2 | MCP | plugin hooks | plugin tool hook |
+| OpenCode2 | MCP | plugin context hook | plugin tool hook |
 | Claude Code | MCP | `UserPromptSubmit` hook | `Stop` hook |
 | Pi | extension tool → `jev ask` | input transform | — |
 | OMP | same extension | input transform | — |
@@ -78,9 +78,13 @@ reported as a config error; no judgment is ever invented.
 2. Link the plugin: `~/.config/opencode/plugins/typesafe` →
    `src/integrations/opencode2` (see the full README in that directory).
 
-The plugin hooks: `prompt` appends the Jev directive when the local claim
-patterns match; `context` keeps the policy line in every model call; tool
-errors spawn `jev triage failure` best-effort.
+The plugin's `context` hook runs before every model call: it re-checks the
+latest user message through `jev hook prompt`, appends the directive when the
+local claim patterns match, and keeps the policy line in the system parts.
+Tool errors spawn `jev triage failure` best-effort. The V2 beta
+(`0.0.0-beta-18269`) accepts a `prompt` hook registration but never dispatches
+it (verified 2026-09-17 with a minimal probe plugin), so OpenCode2 does not
+register one.
 
 After plugin edits: `opencode2 service restart` — a stale `(failed)` plugin
 entry clears on restart.

@@ -2,9 +2,17 @@
 //
 // The `typesafe_ask` tool is served by `jev mcp` — one stdio MCP server for
 // every harness (see the README for the `mcp.servers.jev` entry). This plugin
-// adds the two deterministic triggers MCP cannot provide: a prompt hook that
-// appends the Jev directive when a quantitative question is detected, and a
-// context hook that keeps the policy line in every model call.
+// adds the two deterministic triggers MCP cannot provide: directive injection
+// when the latest prompt asks for a quantitative judgment, and failure triage
+// on tool errors.
+//
+// Trigger shape: beta 0.0.0-beta-18269 accepts a `prompt` hook registration but
+// never dispatches it (verified 2026-09-17 with a minimal probe plugin —
+// `context` and `execute.after` fire, `prompt` does not). Directive injection
+// therefore lives in the `context` hook, which runs before every model call:
+// the latest user message is re-checked through `jev hook prompt` and the
+// directive is pushed into the system parts. The check is cached per prompt so
+// tool-driven continuations do not re-run the CLI.
 //
 // The plugin imports nothing from the repo on purpose. OpenCode loads it
 // through the ~/.config/opencode/plugins/typesafe symlink, and the Bun loader
@@ -60,6 +68,29 @@ const triageFailure = (text: string): void => {
   void runJev(["triage", "failure"], text.slice(0, 4000), TRIAGE_TIMEOUT_MS);
 };
 
+/** Minimal structural view of the SDK transcript; the shim imports no SDK types. */
+interface TranscriptPart {
+  readonly type: string;
+  readonly text?: string;
+}
+
+interface TranscriptMessage {
+  readonly role: string;
+  readonly content: ReadonlyArray<TranscriptPart>;
+}
+
+/** Latest user message text in the assembled transcript; empty when there is none. */
+const latestUserText = (messages: ReadonlyArray<TranscriptMessage>): string => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === undefined || message.role !== "user") continue;
+    return message.content
+      .flatMap((part) => (part.type === "text" && part.text !== undefined ? [part.text] : []))
+      .join("\n");
+  }
+  return "";
+};
+
 export default Plugin.define({
   id: "typesafe",
   async setup(ctx) {
@@ -70,20 +101,30 @@ export default Plugin.define({
     }
     const contextPolicy = policy.ok ? policy.stdout.trim() : "";
 
-    await ctx.session.hook("prompt", async (event) => {
-      const result = await runJev(
-        ["hook", "prompt"],
-        JSON.stringify({ prompt: event.prompt.text }),
-        HOOK_TIMEOUT_MS,
-      );
-      const directive = result.stdout.trim();
-      if (!result.ok || directive.length === 0) return;
-      event.prompt.text += `\n\n${directive}`;
-    });
+    // One CLI run per prompt; tool continuations reuse the cached directive.
+    let cachedPrompt = "";
+    let cachedDirective = "";
 
-    await ctx.session.hook("context", (event) => {
-      if (contextPolicy.length === 0) return;
-      event.system.push({ type: "text", text: contextPolicy });
+    const directiveFor = async (sessionID: string, prompt: string): Promise<string> => {
+      const key = `${sessionID}\u0000${prompt}`;
+      if (key === cachedPrompt) return cachedDirective;
+      cachedPrompt = key;
+      cachedDirective = "";
+      if (prompt.length === 0) return "";
+      const result = await runJev(["hook", "prompt"], JSON.stringify({ prompt }), HOOK_TIMEOUT_MS);
+      if (!result.ok) return "";
+      cachedDirective = result.stdout.trim();
+      return cachedDirective;
+    };
+
+    await ctx.session.hook("context", async (event) => {
+      if (contextPolicy.length > 0) {
+        event.system.push({ type: "text", text: contextPolicy });
+      }
+      const directive = await directiveFor(event.sessionID, latestUserText(event.messages));
+      if (directive.length > 0) {
+        event.system.push({ type: "text", text: directive });
+      }
     });
 
     await ctx.tool.hook("execute.after", (event) => {
