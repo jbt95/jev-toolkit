@@ -4,13 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  correlate,
-  extractClaude,
-  extractOpencode,
-  extractPiOmp,
-  type RawOpportunity,
-} from "@/audit/opportunities.ts";
+import { extractClaude, extractOpencode, extractPiOmp } from "@/audit/opportunities.ts";
 
 const fixturesDir = join(import.meta.dirname, "..", "fixtures");
 const since = "2026-09-16T00:00:00.000Z";
@@ -73,37 +67,5 @@ describe("audit extractors", () => {
       extractOpencode("/nonexistent/opencode.db", since),
     );
     expect(opportunities).toHaveLength(0);
-  });
-
-  it("correlates opportunities with call events by harness and session", () => {
-    const opportunities: ReadonlyArray<RawOpportunity> = [
-      {
-        harness: "cli",
-        sessionID: "s1",
-        source: "assistant_message",
-        pattern: "percent",
-        matchedText: "10%",
-      },
-      {
-        harness: "cli",
-        sessionID: "s2",
-        source: "assistant_message",
-        pattern: "ranking",
-        matchedText: "best",
-      },
-    ];
-    const correlated = correlate(opportunities, [
-      {
-        _tag: "call",
-        ts: "2026-09-16T00:00:00.000Z",
-        harness: "cli",
-        sessionID: "s1",
-        model: "jev-latest",
-        latencyMs: 10,
-        status: "ok",
-        questions: [],
-      },
-    ]);
-    expect(correlated.map((entry) => entry.matched)).toEqual([true, false]);
   });
 });

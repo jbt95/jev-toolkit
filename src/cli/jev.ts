@@ -9,7 +9,6 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
-  correlate,
   extractClaude,
   extractOpencode,
   extractPiOmp,
@@ -44,9 +43,12 @@ import {
   piSessionsDir,
 } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
+import { clip, redact } from "../core/text.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
+import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
+import { claimConfirmQuestions, confirmedIndexes } from "../question-packs/claim-confirmation.ts";
 import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
-import { clip, failureQuestions, redact } from "../question-packs/failure-triage.ts";
+import { failureQuestions } from "../question-packs/failure-triage.ts";
 import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
 import { labelQuestions } from "../question-packs/session-labeling.ts";
 
@@ -102,28 +104,48 @@ const parseSinceMs = (value: string): number => {
 };
 
 const printAuditSummary = (
-  opportunities: ReadonlyArray<CorrelatedOpportunity>,
+  input: {
+    readonly raw: ReadonlyArray<RawOpportunity>;
+    readonly correlated: ReadonlyArray<CorrelatedOpportunity>;
+  },
   dryRun: boolean,
 ): void => {
-  const summary = new Map<string, { total: number; matched: number }>();
-  for (const opportunity of opportunities) {
-    const entry = summary.get(opportunity.harness) ?? { total: 0, matched: 0 };
-    entry.total += 1;
-    if (opportunity.matched) entry.matched += 1;
-    summary.set(opportunity.harness, entry);
+  const perHarness = new Map<string, { raw: number; confirmed: number; matched: number }>();
+  const entryFor = (harness: string) => {
+    const existing = perHarness.get(harness) ?? { raw: 0, confirmed: 0, matched: 0 };
+    perHarness.set(harness, existing);
+    return existing;
+  };
+  for (const item of input.raw) entryFor(item.harness).raw += 1;
+  for (const item of input.correlated) {
+    const entry = entryFor(item.harness);
+    entry.confirmed += 1;
+    if (item.matched) entry.matched += 1;
   }
   console.log(
-    `harness        opportunities matched missed compliance${dryRun ? " (dry run)" : ""}`,
+    `harness        candidates confirmed matched missed compliance${dryRun ? " (dry run)" : ""}`,
   );
-  const rows = [...summary.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const rows = [...perHarness.entries()].sort(([a], [b]) => a.localeCompare(b));
+  let rawTotal = 0;
+  let confirmedTotal = 0;
+  let matchedTotal = 0;
   for (const [harness, counts] of rows) {
-    const missed = counts.total - counts.matched;
+    rawTotal += counts.raw;
+    confirmedTotal += counts.confirmed;
+    matchedTotal += counts.matched;
+    const missed = counts.confirmed - counts.matched;
     const compliance =
-      counts.total === 0 ? "0.0%" : `${((counts.matched / counts.total) * 100).toFixed(1)}%`;
+      counts.confirmed === 0
+        ? "0.0%"
+        : `${((counts.matched / counts.confirmed) * 100).toFixed(1)}%`;
     console.log(
-      `${harness.padEnd(15)}${String(counts.total).padEnd(14)}${String(counts.matched).padEnd(8)}${String(missed).padEnd(7)}${compliance}`,
+      `${harness.padEnd(15)}${String(counts.raw).padEnd(11)}${String(counts.confirmed).padEnd(10)}${String(counts.matched).padEnd(8)}${String(missed).padEnd(7)}${compliance}`,
     );
   }
+  const kept = rawTotal === 0 ? "0.0%" : `${((confirmedTotal / rawTotal) * 100).toFixed(1)}%`;
+  console.log(
+    `total: candidates=${rawTotal} confirmed=${confirmedTotal} matched=${matchedTotal} (regex kept ${kept})`,
+  );
 };
 
 const extractTranscriptFailure = (raw: string): string => {
@@ -230,6 +252,8 @@ export function runCli(
           return 1;
         }
         const log = yield* EventLog;
+        const client = yield* JevClient;
+        const harness = harnessFromEnv("script");
         const dryRun = rest.includes("--dry-run");
         const harnessFlag = flag(rest, "--harness") ?? "all";
         const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
@@ -265,10 +289,88 @@ export function runCli(
           );
         }
 
+        // Stage 1: confirm regex candidates with Jev (batches of 20).
+        const confirmed: Array<RawOpportunity> = [];
+        for (let start = 0; start < opportunities.length; start += 20) {
+          const batch = opportunities.slice(start, start + 20);
+          const result = yield* client
+            .ask({
+              harness,
+              state: {
+                candidates: batch.map((item, index) => ({
+                  id: `c${index}`,
+                  pattern: item.pattern,
+                  matchedText: item.matchedText,
+                  context: item.context,
+                })),
+              },
+              questions: claimConfirmQuestions(
+                batch.map((item, index) => ({ id: `c${index}`, matchedText: item.matchedText })),
+              ),
+            })
+            .pipe(Effect.mapError(describeJevError));
+          const kept = confirmedIndexes(result.answers, batch.length);
+          for (const index of kept) {
+            const item = batch[index];
+            if (item !== undefined) confirmed.push(item);
+          }
+        }
+
+        // Stage 2: align each confirmed claim with the questions asked in its session.
         const events = yield* log
           .read()
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
-        const correlated = correlate(opportunities, events);
+        const sessionQuestions = new Map<string, Array<string>>();
+        for (const event of events) {
+          if (event._tag === "call" && event.sessionID !== undefined) {
+            const key = `${event.harness}|${event.sessionID}`;
+            const list = sessionQuestions.get(key) ?? [];
+            for (const question of event.questions) {
+              if (!list.includes(question.id)) list.push(question.id);
+            }
+            sessionQuestions.set(key, list);
+          }
+        }
+        const bySession = new Map<string, Array<RawOpportunity>>();
+        for (const item of confirmed) {
+          const key = `${item.harness}|${item.sessionID}`;
+          const list = bySession.get(key) ?? [];
+          list.push(item);
+          bySession.set(key, list);
+        }
+        const correlated: Array<CorrelatedOpportunity> = [];
+        for (const [key, items] of bySession) {
+          const questions = sessionQuestions.get(key);
+          if (questions === undefined || questions.length === 0) {
+            for (const item of items) correlated.push({ ...item, matched: false });
+            continue;
+          }
+          for (let start = 0; start < items.length; start += 20) {
+            const batch = items.slice(start, start + 20);
+            const result = yield* client
+              .ask({
+                harness,
+                state: {
+                  sessionQuestions: questions.slice(0, 40),
+                  claims: batch.map((item, index) => ({
+                    id: `a${index}`,
+                    pattern: item.pattern,
+                    matchedText: item.matchedText,
+                    context: item.context,
+                  })),
+                },
+                questions: claimAlignmentQuestions(
+                  batch.map((item, index) => ({ id: `a${index}`, matchedText: item.matchedText })),
+                ),
+              })
+              .pipe(Effect.mapError(describeJevError));
+            const matchedIndexes = new Set(alignedIndexes(result.answers, batch.length));
+            batch.forEach((item, index) => {
+              correlated.push({ ...item, matched: matchedIndexes.has(index) });
+            });
+          }
+        }
+
         if (!dryRun) {
           for (const opportunity of correlated) {
             yield* log
@@ -285,7 +387,7 @@ export function runCli(
           }
         }
         yield* Effect.sync(() => {
-          printAuditSummary(correlated, dryRun);
+          printAuditSummary({ raw: opportunities, correlated }, dryRun);
         });
         return 0;
       }

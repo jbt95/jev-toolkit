@@ -7,7 +7,8 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { matchQuantitativeClaim } from "../core/detector.ts";
-import { Harness, type JevEvent } from "../core/schema.ts";
+import { Harness } from "../core/schema.ts";
+import { clip, redact } from "../core/text.ts";
 
 export class AuditError extends Data.TaggedError("AuditError")<{ readonly source: string }> {}
 
@@ -17,6 +18,7 @@ export const RawOpportunity = Schema.Struct({
   source: Schema.Literals(["assistant_message"]),
   pattern: Schema.String,
   matchedText: Schema.String,
+  context: Schema.String,
 });
 export type RawOpportunity = Schema.Schema.Type<typeof RawOpportunity>;
 
@@ -60,14 +62,17 @@ const claimsFromText = (
   harness: RawOpportunity["harness"],
   sessionID: string,
   text: string,
-): ReadonlyArray<RawOpportunity> =>
-  matchQuantitativeClaim(text).map((match) => ({
+): ReadonlyArray<RawOpportunity> => {
+  const context = clip(redact(text), 1000);
+  return matchQuantitativeClaim(text).map((match) => ({
     harness,
     sessionID,
     source: "assistant_message",
     pattern: match.pattern,
     matchedText: match.matched,
+    context,
   }));
+};
 
 const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
   const entries = await readdir(root, { recursive: true });
@@ -178,19 +183,7 @@ export function extractPiOmp(
   });
 }
 
-/** An opportunity is matched when the same harness + session produced a call event. */
-export function correlate(
-  opportunities: ReadonlyArray<RawOpportunity>,
-  events: ReadonlyArray<JevEvent>,
-): ReadonlyArray<CorrelatedOpportunity> {
-  const callSessions = new Set<string>();
-  for (const event of events) {
-    if (event._tag === "call" && event.sessionID !== undefined) {
-      callSessions.add(`${event.harness}|${event.sessionID}`);
-    }
-  }
-  return opportunities.map((opportunity) => ({
-    ...opportunity,
-    matched: callSessions.has(`${opportunity.harness}|${opportunity.sessionID}`),
-  }));
+/** An opportunity is matched when a session question actually addressed the claim. */
+export interface CorrelatedOpportunity extends RawOpportunity {
+  readonly matched: boolean;
 }

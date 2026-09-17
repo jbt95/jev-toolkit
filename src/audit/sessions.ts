@@ -7,7 +7,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Harness } from "../core/schema.ts";
-import { clip, redact } from "../question-packs/failure-triage.ts";
+import { clip, redact } from "../core/text.ts";
 
 export class SessionAuditError extends Data.TaggedError("SessionAuditError")<{
   readonly source: string;
