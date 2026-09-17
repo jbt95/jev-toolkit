@@ -44,11 +44,20 @@ import {
 } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
 import { clip, redact } from "../core/text.ts";
+import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import { claimConfirmQuestions, confirmedIndexes } from "../question-packs/claim-confirmation.ts";
-import { commitQuestions, verdictFor } from "../question-packs/commit-conformance.ts";
-import { failureQuestions, identityQuestions } from "../question-packs/failure-triage.ts";
+import {
+  commitQuestions,
+  verdictFor,
+  type CommitVerdict,
+} from "../question-packs/commit-conformance.ts";
+import {
+  failureQuestions,
+  identityQuestions,
+  transcriptSelectionQuestions,
+} from "../question-packs/failure-triage.ts";
 import { ReviewInput, reviewQuestions, routeTriage } from "../question-packs/reviewer-triage.ts";
 import { labelQuestions } from "../question-packs/session-labeling.ts";
 
@@ -146,18 +155,6 @@ const printAuditSummary = (
   console.log(
     `total: candidates=${rawTotal} confirmed=${confirmedTotal} matched=${matchedTotal} (regex kept ${kept})`,
   );
-};
-
-const extractTranscriptFailure = (raw: string): string => {
-  const recent = raw
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .slice(-40)
-    .reverse();
-  for (const line of recent) {
-    if (line.includes('"is_error":true') || line.includes('"is_error": true')) return line;
-  }
-  return "";
 };
 
 const execFileAsync = promisify(execFile);
@@ -494,7 +491,7 @@ export function runCli(
         if (rest[0] !== "commit") {
           yield* Effect.sync(() => {
             console.error(
-              "usage: jev check commit --message-file FILE | jev check commit --replay N [--repo DIR]",
+              "usage: jev check commit --message-file FILE [--spec FILE] | jev check commit --replay N [--repo DIR] [--spec FILE]",
             );
           });
           return 1;
@@ -502,6 +499,31 @@ export function runCli(
         const client = yield* JevClient;
         const log = yield* EventLog;
         const harness = harnessFromEnv("script");
+        const specFlag = flag(rest, "--spec");
+        const rawSpec =
+          specFlag === undefined
+            ? undefined
+            : yield* Effect.tryPromise({
+                try: () => readFile(specFlag, "utf8"),
+                catch: () => `cannot read spec file: ${specFlag}`,
+              });
+        const spec = rawSpec === undefined ? undefined : clip(redact(rawSpec), 1200);
+        // One call per message judging the four rules; with a spec, the same
+        // call also answers which rules the repo's spec actually requires.
+        const judge = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
+          Effect.gen(function* () {
+            const message = clip(redact(rawMessage), 1500);
+            const base = { message };
+            const state = spec === undefined ? base : { ...base, spec };
+            const result = yield* client
+              .ask({ harness, state, questions: commitQuestions({ message, spec }) })
+              .pipe(Effect.mapError(describeJevError));
+            return verdictFor({
+              message: rawMessage,
+              answers: result.answers,
+              profile: spec === undefined ? undefined : result.answers,
+            });
+          });
         const replayFlag = flag(rest, "--replay");
         if (replayFlag !== undefined) {
           const requested = Number.parseInt(replayFlag, 10);
@@ -513,10 +535,7 @@ export function runCli(
           });
           for (const commit of commits) {
             const message = `${commit.subject}\n${commit.body}`;
-            const result = yield* client
-              .ask({ harness, state: { message }, questions: commitQuestions({ message }) })
-              .pipe(Effect.mapError(describeJevError));
-            const verdict = verdictFor({ message, answers: result.answers });
+            const verdict = yield* judge(message);
             const now = yield* Clock.currentTimeMillis;
             yield* log
               .append({
@@ -539,7 +558,7 @@ export function runCli(
         if (messageFile === undefined) {
           yield* Effect.sync(() => {
             console.error(
-              "usage: jev check commit --message-file FILE | jev check commit --replay N [--repo DIR]",
+              "usage: jev check commit --message-file FILE [--spec FILE] | jev check commit --replay N [--repo DIR] [--spec FILE]",
             );
           });
           return 1;
@@ -548,10 +567,7 @@ export function runCli(
           try: () => readFile(messageFile, "utf8"),
           catch: () => `cannot read message file: ${messageFile}`,
         });
-        const result = yield* client
-          .ask({ harness, state: { message }, questions: commitQuestions({ message }) })
-          .pipe(Effect.mapError(describeJevError));
-        const verdict = verdictFor({ message, answers: result.answers });
+        const verdict = yield* judge(message);
         const now = yield* Clock.currentTimeMillis;
         yield* log
           .append({
@@ -644,12 +660,36 @@ export function runCli(
             try: () => readFile(transcriptFlag, "utf8"),
             catch: () => `cannot read transcript: ${transcriptFlag}`,
           });
-          failureText = extractTranscriptFailure(raw);
-          if (failureText.length === 0) {
+          const candidates = transcriptFailureCandidates(raw);
+          if (candidates.length === 0) {
             yield* Effect.sync(() => {
               console.error("no failing entry found in the transcript's last 40 lines");
             });
             return 1;
+          }
+          if (candidates.length === 1) {
+            failureText = candidates[0] ?? "";
+          } else {
+            const selection = yield* client
+              .ask({
+                harness,
+                state: { candidates },
+                questions: transcriptSelectionQuestions({ candidates }),
+              })
+              .pipe(Effect.mapError(describeJevError));
+            const answer = selection.answers["failure_index"];
+            const index =
+              answer?._tag === "choice"
+                ? Number.parseInt(answer.choice.replace("candidate_", ""), 10)
+                : Number.NaN;
+            const selected = Number.isNaN(index) ? undefined : candidates[index];
+            if (selected === undefined) {
+              yield* Effect.sync(() => {
+                console.error("no failing entry selected in the transcript");
+              });
+              return 1;
+            }
+            failureText = selected;
           }
           source = "transcript";
         } else if (textFlag !== undefined && textFlag !== "-") {

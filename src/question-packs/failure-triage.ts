@@ -57,3 +57,25 @@ export function identityQuestions(input: FailureIdentityInput): QuestionMap {
     },
   };
 }
+
+export interface TranscriptSelectionInput {
+  readonly candidates: ReadonlyArray<string>;
+}
+
+/** Pick which prefiltered transcript snippet is the failure the turn ended on. */
+export function transcriptSelectionQuestions(input: TranscriptSelectionInput): QuestionMap {
+  const criteria: Record<string, string> = {};
+  input.candidates.forEach((text, index) => {
+    criteria[`candidate_${index}`] = text.slice(0, 140);
+  });
+  criteria["none"] = "none of these is a failure";
+  return {
+    failure_index: {
+      _tag: "choice",
+      instructions:
+        "Which candidate snippet is the failure that ended the turn? " +
+        "Answer none when none of them reports a failure.",
+      criteria,
+    },
+  };
+}

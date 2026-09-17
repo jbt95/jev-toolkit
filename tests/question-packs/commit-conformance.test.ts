@@ -45,4 +45,44 @@ describe("commit conformance", () => {
     expect(verdict.passed).toBe(false);
     expect(verdict.failed).toEqual(["explains_why", "ticket_linked"]);
   });
+
+  it("asks profile questions when a spec is provided", () => {
+    const questions = commitQuestions({
+      message: goodMessage,
+      spec: "Commits must link a ticket.",
+    });
+    expect(Object.keys(questions)).toHaveLength(8);
+    expect(questions["p_ticket_linked"]?._tag).toBe("noul");
+    const ticket = questions["ticket_linked"];
+    if (ticket?._tag !== "noul") throw new Error("expected a noul question");
+    expect(ticket.instructions).toContain("documented spec");
+  });
+
+  it("ignores rules the repo spec does not require", () => {
+    const answers: AnswerMap = { ...allPass, ticket_linked: { _tag: "noul", noul: 0.1 } };
+    const profile: AnswerMap = {
+      p_explains_why: { _tag: "noul", noul: 0.9 },
+      p_ticket_linked: { _tag: "noul", noul: 0.1 },
+      p_test_evidence: { _tag: "noul", noul: 0.9 },
+      p_scope_consistent: { _tag: "noul", noul: 0.9 },
+    };
+    expect(verdictFor({ message: goodMessage, answers, profile })).toEqual({
+      passed: true,
+      failed: [],
+    });
+    expect(verdictFor({ message: goodMessage, answers }).failed).toEqual(["ticket_linked"]);
+  });
+
+  it("keeps profile-required rules enforced", () => {
+    const answers: AnswerMap = { ...allPass, test_evidence: { _tag: "noul", noul: 0.2 } };
+    const profile: AnswerMap = {
+      p_explains_why: { _tag: "noul", noul: 0.9 },
+      p_ticket_linked: { _tag: "noul", noul: 0.9 },
+      p_test_evidence: { _tag: "noul", noul: 0.9 },
+      p_scope_consistent: { _tag: "noul", noul: 0.9 },
+    };
+    expect(verdictFor({ message: goodMessage, answers, profile }).failed).toEqual([
+      "test_evidence",
+    ]);
+  });
 });

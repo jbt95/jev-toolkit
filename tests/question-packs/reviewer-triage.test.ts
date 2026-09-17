@@ -32,6 +32,7 @@ describe("reviewer triage", () => {
         confidence: 0.9,
         probabilities: { blocking: 0.9 },
       },
+      f_f1_evidence: { _tag: "noul", noul: 0.9 },
       f_f2_class: {
         _tag: "choice",
         choice: "cosmetic",
@@ -49,5 +50,40 @@ describe("reviewer triage", () => {
     expect(routed.questions.map((finding) => finding.id)).toEqual(["f2"]);
     expect(routed.reviewSubstantive).toBe(true);
     expect(routed.truncated).toBe(true);
+  });
+
+  it("requires evidence before a finding can block", () => {
+    const unsupported: AnswerMap = {
+      f_f1_class: {
+        _tag: "choice",
+        choice: "blocking",
+        confidence: 0.9,
+        probabilities: { blocking: 0.9 },
+      },
+      f_f1_evidence: { _tag: "noul", noul: 0.2 },
+    };
+
+    const routed = routeTriage(findings, unsupported);
+
+    expect(routed.blockers).toEqual([]);
+    expect(routed.questions.map((finding) => finding.id)).toEqual(["f1", "f2"]);
+  });
+
+  it("lets Serious+ severity override a cosmetic classification", () => {
+    const severe: AnswerMap = {
+      f_f2_class: {
+        _tag: "choice",
+        choice: "cosmetic",
+        confidence: 0.8,
+        probabilities: { cosmetic: 0.8 },
+      },
+      f_f2_severity: { _tag: "score", score: 3, confidence: 0.9 },
+      f_f2_evidence: { _tag: "noul", noul: 0.8 },
+    };
+
+    const routed = routeTriage(findings, severe);
+
+    expect(routed.blockers.map((finding) => finding.id)).toEqual(["f2"]);
+    expect(routed.cosmetic).toEqual([]);
   });
 });

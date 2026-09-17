@@ -61,23 +61,39 @@ export interface RoutedFindings {
   readonly truncated: boolean;
 }
 
-/** Class answers below 0.6 confidence route to the questions bucket. */
+const CLASS_CONFIDENCE = 0.6;
+/** Severity scores index ["Negligible","Minor","Moderate","Serious","Critical"]. */
+const SERIOUS_SEVERITY = 3;
+const EVIDENCE_FLOOR = 0.5;
+
+/**
+ * Composition policy: a blocker needs a blocking classification (or Serious+
+ * severity) *and* cited evidence; low-confidence or unsupported findings go to
+ * questions; remaining confident findings are cosmetic.
+ */
 export function routeTriage(findings: ReadonlyArray<Finding>, answers: AnswerMap): RoutedFindings {
   const blockers: Array<Finding> = [];
   const cosmetic: Array<Finding> = [];
   const questions: Array<Finding> = [];
   for (const finding of findings) {
-    const answer = answers[`f_${finding.id}_class`];
-    const choice = answer?._tag === "choice" ? answer : undefined;
-    if (choice !== undefined && choice.confidence >= 0.6) {
-      if (choice.choice === "blocking") {
-        blockers.push(finding);
-        continue;
-      }
-      if (choice.choice === "cosmetic") {
-        cosmetic.push(finding);
-        continue;
-      }
+    const classAnswer = answers[`f_${finding.id}_class`];
+    const severityAnswer = answers[`f_${finding.id}_severity`];
+    const evidenceAnswer = answers[`f_${finding.id}_evidence`];
+    const choice = classAnswer?._tag === "choice" ? classAnswer : undefined;
+    if (choice === undefined || choice.confidence < CLASS_CONFIDENCE) {
+      questions.push(finding);
+      continue;
+    }
+    const severity = severityAnswer?._tag === "score" ? severityAnswer.score : 0;
+    const evidence = evidenceAnswer?._tag === "noul" ? evidenceAnswer.noul : 0;
+    if (choice.choice === "blocking" || severity >= SERIOUS_SEVERITY) {
+      if (evidence >= EVIDENCE_FLOOR) blockers.push(finding);
+      else questions.push(finding);
+      continue;
+    }
+    if (choice.choice === "cosmetic") {
+      cosmetic.push(finding);
+      continue;
     }
     questions.push(finding);
   }
