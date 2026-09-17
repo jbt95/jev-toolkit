@@ -4,7 +4,8 @@
 // every harness (see the README for the `mcp.servers.jev` entry). This plugin
 // adds the two deterministic triggers MCP cannot provide: directive injection
 // when the latest prompt asks for a quantitative judgment, and failure triage
-// on tool errors.
+// on tool errors. The context hook also hands the model the exact session id so
+// MCP calls can be attributed back to the session (see below).
 //
 // Trigger shape: beta 0.0.0-beta-18269 accepts a `prompt` hook registration but
 // never dispatches it (verified 2026-09-17 with a minimal probe plugin —
@@ -13,6 +14,10 @@
 // the latest user message is re-checked through `jev hook prompt` and the
 // directive is pushed into the system parts. The check is cached per prompt so
 // tool-driven continuations do not re-run the CLI.
+//
+// MCP cannot carry a session id, so the context hook also injects the session
+// id with instructions to pass it as `sessionID` in every typesafe_ask call;
+// the audit uses that to align detected claims with the questions asked.
 //
 // The plugin imports nothing from the repo on purpose. OpenCode loads it
 // through the ~/.config/opencode/plugins/typesafe symlink, and the Bun loader
@@ -121,6 +126,15 @@ export default Plugin.define({
       if (contextPolicy.length > 0) {
         event.system.push({ type: "text", text: contextPolicy });
       }
+      // Attribution: the MCP transport cannot carry the session id, so hand the
+      // model the exact value to pass back with each typesafe_ask call.
+      event.system.push({
+        type: "text",
+        text:
+          `Jev session: ${event.sessionID}. ` +
+          `Include sessionID: "${event.sessionID}" in every typesafe_ask call so the ` +
+          "judgment is attributed to this session; never invent a session id.",
+      });
       const directive = await directiveFor(event.sessionID, latestUserText(event.messages));
       if (directive.length > 0) {
         event.system.push({ type: "text", text: directive });

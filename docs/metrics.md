@@ -49,11 +49,18 @@ Notes on semantics:
 - **Compliance** is `matched / detected` from `opportunity` events written by
   `jev audit run`. Detection is model-first; unmatched claims are those whose
   session questions did not address them (or whose session made no Jev call).
+  Alignment needs `call` events that carry a `sessionID`; MCP cannot transport
+  one, so the OpenCode2 context hook injects the id and asks the model to pass
+  it as `sessionID` in each `typesafe_ask` call. Calls without an id cannot be
+  matched.
 - **Sessions with calls** counts distinct `sessionID`s on `call` events —
   a session without a `sessionID` (some MCP clients) cannot be counted.
 - **Coverage** pairs labeled sessions with calls:
   `jev_labeled_sessions_with_calls_total / jev_labeled_sessions_total`, both
   distinct-session counts (re-labeling a session does not inflate the ratio).
+- **Outcome, waste, and friction** keep one observation per labeled session:
+  when a session is labeled again, its latest label wins. Labels without a
+  `sessionID` cannot be deduped and count per event.
 - **Confidence** is recorded per answer, so a single call contributes several
   observations.
 - Histograms use `le` buckets and expose `_bucket`/`_sum`/`_count` series.

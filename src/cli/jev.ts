@@ -67,6 +67,7 @@ const AskPayload = Schema.Struct({
   state: Schema.Json,
   questions: QuestionMap,
   model: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
+  sessionID: Schema.optional(Schema.NonEmptyString),
 });
 const decodeAskPayload = Schema.decodeUnknownEffect(Schema.fromJsonString(AskPayload));
 
@@ -233,7 +234,7 @@ export function runCli(
         const raw = yield* stdin();
         const payload = yield* decodeAskPayload(raw).pipe(
           Effect.mapError(
-            () => "invalid ask payload on stdin: expected {state, questions, model?}",
+            () => "invalid ask payload on stdin: expected {state, questions, model?, sessionID?}",
           ),
         );
         const harness = harnessFromEnv("cli");
@@ -243,6 +244,7 @@ export function runCli(
             state: payload.state,
             questions: payload.questions,
             model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+            sessionID: payload.sessionID,
           })
           .pipe(Effect.mapError(describeJevError));
         yield* Effect.sync(() => {
@@ -450,11 +452,11 @@ export function runCli(
                   claims: batch.map((item, index) => ({
                     id: `a${index}`,
                     pattern: item.pattern,
-                    excerpt: item.excerpt,
+                    excerpt: item.context,
                   })),
                 },
                 questions: claimAlignmentQuestions(
-                  batch.map((item, index) => ({ id: `a${index}`, excerpt: item.excerpt })),
+                  batch.map((item, index) => ({ id: `a${index}`, excerpt: item.context })),
                 ),
               })
               .pipe(Effect.mapError(describeJevError));

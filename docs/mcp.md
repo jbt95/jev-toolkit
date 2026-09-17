@@ -53,9 +53,9 @@ sequenceDiagram
   participant T as TypeSafe API
   participant L as EventLog
 
-  A->>S: tools/call typesafe_ask { state, questions, model? }
+  A->>S: tools/call typesafe_ask { state, questions, model?, sessionID? }
   S->>S: Schema decode (QuestionMap)
-  S->>C: ask({ harness, state, questions })
+  S->>C: ask({ harness, state, questions, sessionID? })
   C->>T: POST /v1/systemone
   T-->>C: answers + usage
   C->>L: call event (latency, answers, tokens)
@@ -70,6 +70,7 @@ sequenceDiagram
 | `state` | string · object · array | The content to judge. Redact secrets, strip raw code — state leaves the machine |
 | `questions` | object | Map of question id → question, internal dialect (`_tag`) |
 | `model` | string? | TypeSafe model; default `jev-latest` |
+| `sessionID` | string? | Harness session id; pass the exact value the harness provides so the call is attributable and auditable. Never invent one |
 
 Question shapes:
 

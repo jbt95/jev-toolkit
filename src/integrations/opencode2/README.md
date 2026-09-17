@@ -13,7 +13,10 @@ Two parts, split by what each can do:
   directive when the latest prompt asks for a quantitative judgment and keeps
   the policy line in every model call. MCP cannot do either. The V2 beta
   (`0.0.0-beta-18269`) accepts a `prompt` hook registration but never
-  dispatches it (verified 2026-09-17), so the context hook carries both.
+  dispatches it (verified 2026-09-17), so the context hook carries both. The
+  same hook injects the session id and asks the model to pass it as `sessionID`
+  in each `typesafe_ask` call, keeping MCP calls attributable for the audit and
+  the impact metrics.
 
 ## Install the MCP tool
 

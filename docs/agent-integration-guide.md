@@ -84,7 +84,9 @@ local claim patterns match, and keeps the policy line in the system parts.
 Tool errors spawn `jev triage failure` best-effort. The V2 beta
 (`0.0.0-beta-18269`) accepts a `prompt` hook registration but never dispatches
 it (verified 2026-09-17 with a minimal probe plugin), so OpenCode2 does not
-register one.
+register one. The same hook injects the session id and instructs the model to
+pass it as `sessionID` to `typesafe_ask`; without that id the audit cannot
+attribute calls to sessions and compliance/coverage stay 0.
 
 After plugin edits: `opencode2 service restart` — a stale `(failed)` plugin
 entry clears on restart.

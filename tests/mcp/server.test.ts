@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { JevConfigError, type AskResult } from "@/core/client.ts";
+import { JevConfigError, type AskInput, type AskResult } from "@/core/client.ts";
 import { createMcpDeps, handleMcpRequest, type JsonValue, type McpDeps } from "@/mcp/server.ts";
 
 const depsWith = (call: McpDeps["call"]): McpDeps => ({ call });
@@ -41,6 +41,7 @@ describe("MCP server", () => {
     expect(parsed.result.tools).toHaveLength(1);
     expect(parsed.result.tools[0].name).toBe("typesafe_ask");
     expect(parsed.result.tools[0].inputSchema.required).toEqual(["state", "questions"]);
+    expect(parsed.result.tools[0].inputSchema.properties.sessionID.type).toBe("string");
   });
 
   it("returns formatted answers for a successful tool call", async () => {
@@ -134,5 +135,25 @@ describe("MCP server", () => {
     });
     expect(failure).toEqual({ ok: false, text: "JevConfigError" });
     expect(invalid.ok).toBe(false);
+  });
+
+  it("passes the optional sessionID through to ask", async () => {
+    const seen: Array<AskInput> = [];
+    const deps = createMcpDeps("script", (input) => {
+      seen.push(input);
+      return Effect.succeed({
+        model: "jev-1.13.0",
+        answers: { q1: { _tag: "noul", noul: 0.99 } },
+        usage: { input: 10, output: 2 },
+      } satisfies AskResult);
+    });
+
+    await deps.call({
+      state: "text",
+      questions: { q1: { _tag: "noul", instructions: "Yes or no?" } },
+      sessionID: "ses_attributed",
+    });
+
+    expect(seen[0]?.sessionID).toBe("ses_attributed");
   });
 });

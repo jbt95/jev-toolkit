@@ -51,6 +51,7 @@ const AskArgs = Schema.Struct({
   state: JsonValueSchema,
   questions: QuestionMap,
   model: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
+  sessionID: Schema.optional(Schema.NonEmptyString),
 });
 const decodeAskArgs = Schema.decodeUnknownEffect(AskArgs);
 
@@ -74,6 +75,12 @@ const INPUT_SCHEMA: JsonValue = {
       additionalProperties: true,
     },
     model: { type: "string", description: "TypeSafe model, default jev-latest." },
+    sessionID: {
+      type: "string",
+      description:
+        "Optional harness session id. Pass the exact value your harness provides so " +
+        "the call can be attributed to that session; never invent one.",
+    },
   },
   required: ["state", "questions"],
   additionalProperties: false,
@@ -186,6 +193,7 @@ export function createMcpDeps(
             state: payload.state,
             questions: payload.questions,
             model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+            sessionID: payload.sessionID,
           }),
         ),
       );

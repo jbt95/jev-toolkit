@@ -89,12 +89,20 @@ describe("audit extractors", () => {
     expect(assistant[0]?.text).toContain("91%");
   });
 
-  it("quotes the prefilter span for detected kinds and falls back to an excerpt", () => {
+  it("quotes the prefilter span and carries a context window for alignment", () => {
     const message: RawMessage = { harness: "cli", sessionID: "s", text: "About 70% done." };
-    expect(toDetectedOpportunity(message, "percent").excerpt).toBe("70%");
-    expect(toDetectedOpportunity({ ...message, text: "prefer A over B" }, "choice").excerpt).toBe(
-      "prefer A over B",
-    );
+    const percent = toDetectedOpportunity(message, "percent");
+    expect(percent.excerpt).toBe("70%");
+    expect(percent.context).toBe("About 70% done.");
+
+    const fallback = toDetectedOpportunity({ ...message, text: "prefer A over B" }, "choice");
+    expect(fallback.excerpt).toBe("prefer A over B");
+    expect(fallback.context).toBe("prefer A over B");
+
+    const padded = `${"x".repeat(200)} 70% ${"y".repeat(200)}`;
+    const windowed = toDetectedOpportunity({ ...message, text: padded }, "percent");
+    expect(windowed.context).toContain("70%");
+    expect(windowed.context.length).toBeLessThan(padded.length);
   });
 
   it("propagates non-ENOENT pi root failures and accepts a missing root", async () => {

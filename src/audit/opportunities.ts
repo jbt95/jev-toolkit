@@ -26,6 +26,8 @@ export interface DetectedOpportunity {
   readonly sessionID: string;
   readonly pattern: ClaimKind;
   readonly excerpt: string;
+  /** Sanitized window around the claim; the alignment prompt needs context. */
+  readonly context: string;
 }
 
 /** An opportunity is matched when a session question actually addressed the claim. */
@@ -35,23 +37,37 @@ export interface CorrelatedOpportunity extends DetectedOpportunity {
 
 /**
  * The regex is no longer the detector. It only quotes the span for a kind Jev
- * already routed, falling back to a short excerpt when it cannot find one.
+ * already routed, falling back to a short excerpt when it cannot find one. A
+ * second, wider window is carried for alignment: judging a claim from a bare
+ * span ("33%") tells the model nothing.
  */
+const CONTEXT_RADIUS = 120;
+
+const windowAround = (text: string, span: string): string => {
+  const at = span.length === 0 ? -1 : text.indexOf(span);
+  if (at < 0) return text.slice(0, CONTEXT_RADIUS * 2);
+  const start = Math.max(0, at - CONTEXT_RADIUS);
+  const end = Math.min(text.length, at + span.length + CONTEXT_RADIUS);
+  return text.slice(start, end);
+};
+
 export const toDetectedOpportunity = (
   message: RawMessage,
   kind: ClaimKind,
 ): DetectedOpportunity => {
-  const excerpt = Option.fromUndefinedOr(
+  const span = Option.fromUndefinedOr(
     matchQuantitativeClaim(message.text).find((match) => match.pattern === kind),
-  ).pipe(
-    Option.map((span) => span.matched),
-    Option.getOrElse(() => message.text.slice(0, 120)),
-  );
+  ).pipe(Option.map((match) => match.matched));
+  const excerpt = Option.getOrElse(span, () => message.text.slice(0, 120));
   return {
     harness: message.harness,
     sessionID: message.sessionID,
     pattern: kind,
     excerpt,
+    context: windowAround(
+      message.text,
+      Option.getOrElse(span, () => ""),
+    ),
   };
 };
 
