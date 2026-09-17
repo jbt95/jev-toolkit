@@ -41,7 +41,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Compliance (24h)",
+      "title": "Compliance",
       "description": "Share of detected quantitative claims that went through Jev.",
       "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
@@ -71,7 +71,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(jev_opportunities_total{matched=\"true\"}[24h])) / sum(rate(jev_opportunities_total[24h]))",
+          "expr": "sum(jev_opportunities_total{matched=\"true\"}) / sum(jev_opportunities_total)",
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]
@@ -316,7 +316,7 @@
     {
       "id": 14,
       "type": "stat",
-      "title": "Jev coverage (24h)",
+      "title": "Jev coverage",
       "description": "Labeled sessions with at least one Jev call over all labeled sessions.",
       "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
@@ -346,7 +346,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(jev_labeled_sessions_with_calls_total[24h])) / sum(increase(jev_labeled_sessions_total[24h]))",
+          "expr": "sum(jev_labeled_sessions_with_calls_total) / sum(jev_labeled_sessions_total)",
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]
