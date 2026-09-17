@@ -1,90 +1,163 @@
 # Agent integration guide
 
-How jev-toolkit wires Jev/TypeSafe into Pi, OMP, Claude Code, and OpenCode2 —
-and how to measure it.
+How jev-toolkit wires Jev/TypeSafe into OpenCode2, Claude Code, Pi, and OMP —
+what each harness gets, how to install it, and what to check when it breaks.
 
-## Architecture in one paragraph
+- Event schema and core design: [architecture.md](architecture.md)
+- Every CLI command: [cli.md](cli.md)
+- MCP protocol details: [mcp.md](mcp.md)
+- Metrics and dashboards: [metrics.md](metrics.md)
 
-The `typesafe_ask` tool lives once, in `jev mcp` (a stdio MCP server); every
-MCP-capable harness connects to it. Harness integrations add only what MCP
-cannot: deterministic triggers (prompt directives, input transforms, tool
-hooks). The `jev` CLI is the operator surface (`ask`, `triage`, `check`,
-`label`, `audit`, `meter`, `hook`) and the fallback tool for harnesses without
-MCP. Every judgment, triage, and label appends to one local event log.
+## Integration model
 
-## Event schema
+The `typesafe_ask` tool lives once, in `jev mcp`. Native integrations add only
+what MCP cannot: deterministic triggers.
 
-One JSONL file: `~/.local/share/jev/events.jsonl` (override `JEV_DATA_DIR`).
-Four kinds, all schema-validated (`src/core/schema.ts`):
+```mermaid
+flowchart LR
+  subgraph H["Harnesses"]
+    OC["OpenCode2"]
+    CC["Claude Code"]
+    PI["Pi"]
+    OMP["OMP"]
+  end
 
-```jsonc
-{"_tag":"call","ts":"…","harness":"opencode2","sessionID":"…","model":"jev-1.13.0",
- "latencyMs":728,"status":"ok","questions":[{"id":"is_dupe","type":"noul"}],
- "answers":{"is_dupe":{"_tag":"noul","noul":0.99}},"tokens":{"input":279,"output":22}}
+  MCP["jev mcp<br/>typesafe_ask"]
+  ASK["jev ask<br/>CLI fallback"]
+  HOOK["jev hook prompt<br/>directive when a claim is detected"]
+  FAIL["jev triage failure<br/>classify failures"]
 
-{"_tag":"opportunity","ts":"…","harness":"claude-code","sessionID":"…",
- "source":"assistant_message","pattern":"percent","matched":false}
-
-{"_tag":"triage","ts":"…","harness":"cli","feature":"failure|review|commit",
- "summary":{"repeats":3,"escalate":1}}          // numeric counts only, never text
-
-{"_tag":"session_label","ts":"…","harness":"opencode2","sessionID":"…",
- "outcome":"shipped","friction":2,"waste":"none","taskType":"review"}
+  OC & CC -->|MCP| MCP
+  PI & OMP -->|spawns CLI| ASK
+  OC -->|prompt · context hooks| HOOK
+  CC -->|UserPromptSubmit| HOOK
+  PI & OMP -->|input transform| HOOK
+  OC -->|tool error hook| FAIL
+  CC -->|Stop hook| FAIL
 ```
 
-## Metric catalogue (`jev meter serve`, port 8788)
+| Harness | Judgment | Prompt trigger | Failure trigger |
+|---|---|---|---|
+| OpenCode2 | MCP | plugin hooks | plugin tool hook |
+| Claude Code | MCP | `UserPromptSubmit` hook | `Stop` hook |
+| Pi | extension tool → `jev ask` | input transform | — |
+| OMP | same extension | input transform | — |
 
-| Metric | Labels | Meaning |
-|---|---|---|
-| `jev_calls_total` | harness, status | Jev API calls (ok/error) |
-| `jev_tokens_total` | harness, kind | TypeSafe input/output tokens |
-| `jev_sessions_with_calls_total` | harness | sessions with ≥1 Jev call |
-| `jev_opportunities_total` | harness, matched | detected quantitative claims (audit) |
-| `jev_compliance_ratio` | harness | matched / all claims |
-| `jev_triage_total` | feature | triage runs (failure/review/commit) |
-| `jev_latency_seconds` | harness, le | call latency histogram |
-| `jev_confidence` | primitive, le | answer confidence histogram |
-| `jev_sessions_total` | harness, outcome | labeled sessions |
-| `jev_waste_total` | harness, pattern | dominant waste pattern |
-| `jev_session_friction` | harness, le | friction histogram |
+All harness paths require `jev` on `PATH`:
 
-Dashboard: `Jev Impact` (`http://localhost:3000/d/jev-impact`), provisioned in
-`~/work/claude-code-metrics`. Smoke: `scripts/check-metrics.sh`.
+```console
+~/personal/jev-toolkit/scripts/install.sh   # links ~/.local/bin/jev → bin/jev
+```
 
-## Per-harness install
+`TYPESAFE_API_KEY` must be visible to the harness process. A missing key is
+reported as a config error; no judgment is ever invented.
 
-**OpenCode2** — MCP entry in the global `opencode.json(c)` plus the trigger
-shim plugin. See `src/integrations/opencode2/README.md`. After meter-code edits run
-`opencode2 service restart`; a stale plugin state clears on restart.
+## OpenCode2
 
-**Claude Code** — `claude plugin marketplace add ~/personal/jev-toolkit` then
-`claude plugin install jev-toolkit@jev-toolkit`. The plugin ships the MCP
-declaration, the `UserPromptSubmit` directive hook, the Stop failure hook, and
-the `jev` skill. Reinstall after manifest changes; restart Claude Code.
-See `src/integrations/claude-code/README.md`.
+**MCP tool** — add to the global `opencode.json(c)`:
 
-**Pi** — symlink `src/integrations/pi` into `~/.pi/agent/extensions/jev`. The
-extension is self-contained (spawns `jev ask` / `jev triage failure`).
-See `src/integrations/pi/README.md`.
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "jev": {
+        "type": "local",
+        "command": ["jev", "mcp"],
+        "environment": { "JEV_HARNESS": "opencode2" }
+      }
+    }
+  }
+}
+```
 
-**OMP** — `omp plugin install ~/personal/jev-toolkit` (root manifest declares
-`pi.extensions`); verify with `omp plugin doctor`. See
-`src/integrations/omp/README.md`.
+**Trigger plugin** — the V2 plugin API is unstable (written against
+`@opencode/plugin` 2.0.2); check the V2 plugins guide if it stops loading.
+
+1. Install the plugin dependency once (network needed):
+   `cd src/integrations/opencode2 && bun install`
+2. Link the plugin: `~/.config/opencode/plugins/typesafe` →
+   `src/integrations/opencode2` (see the full README in that directory).
+
+The plugin hooks: `prompt` appends the Jev directive when the local claim
+patterns match; `context` keeps the policy line in every model call; tool
+errors spawn `jev triage failure` best-effort.
+
+After plugin edits: `opencode2 service restart` — a stale `(failed)` plugin
+entry clears on restart.
+
+## Claude Code
+
+```console
+claude plugin marketplace add ~/personal/jev-toolkit
+claude plugin install jev-toolkit@jev-toolkit
+claude plugin list
+```
+
+The plugin ships:
+
+- `mcpServers.jev` → `jev mcp` with `JEV_HARNESS=claude-code`
+- `UserPromptSubmit` → `jev hook prompt` (prints the directive or nothing;
+  never blocks, 10s timeout)
+- `Stop` → `jev triage failure --transcript $transcript_path`, filtered to
+  print only when `blocks_work ≥ 0.7` or the loop breaker escalates (60s
+  timeout)
+- `skills/jev/SKILL.md` — when and how to call `typesafe_ask`
+
+Reinstall after manifest changes (the plugin cache copies files at install
+time) and restart Claude Code.
+
+## Pi
+
+```console
+ln -sfn ~/personal/jev-toolkit/src/integrations/pi ~/.pi/agent/extensions/jev
+```
+
+Self-contained extension: `typesafe_ask` delegates to `jev ask`, the input
+transform delegates to `jev hook prompt`. No `effect` import, no repo-relative
+imports, nothing to install (`typebox` comes from Pi's shared extensions).
+Events carry `harness: "pi"`.
+
+## OMP
+
+```console
+omp plugin install ~/personal/jev-toolkit
+omp plugin doctor
+```
+
+OMP vendors the Pi extension API, so this package re-exports the Pi
+extension; one registration serves both. `omp plugin doctor` must report a
+`pi` manifest and no load errors. Events carry `harness: "omp"`.
+
+## Git commit hook
+
+`src/integrations/git-hooks/commit-msg` runs `jev check commit` on every
+commit. Warn-only by default; `JEV_COMMIT_GATE=block` mirrors the verdict exit
+code. Install by copying/symlinking into `.git/hooks/` or via
+`core.hooksPath`.
+
+## Trigger reference
+
+- The live trigger is the local regex (`core/detector.ts`): percent,
+  probability, ranking, estimate, and choice patterns. It only decides whether
+  to append the directive — a harmless nudge, not a gate.
+- The audit's claim detection is model-first (`claim-detection` pack); the
+  regex only quotes spans there. To check whether the live trigger is missing
+  real prompts, run `jev audit prompts --since 7d`.
+- The directive text lives in `core/directives.ts` and is shared by every
+  harness; the context policy line is injected by the MCP `initialize`
+  instructions and the OpenCode2 context hook.
 
 ## Troubleshooting
 
-- **MCP tool missing in OpenCode2** — check `opencode2 plugin list`; a
-  `(failed)` plugin entry clears on `opencode2 service restart`.
-- **No events** — `jev events | tail`; the log path honors `JEV_DATA_DIR`.
-- **Dashboard stale/empty** — restart the meter after meter-code edits
-  (`launchctl bootout gui/$UID/com.jev.meter && launchctl bootstrap …`), then
-  `podman-compose restart grafana` if a dashboard file changed; Prometheus
-  scrapes every 30s.
-- **MCP tool errors** — the tool returns the error as text; missing
-  `TYPESAFE_API_KEY` reports as a config error, never a guess.
-- **Pi/OMP extension fails to load** — jiti resolves relative paths lexically
-  and bare imports from the loading location; keep extensions self-contained
-  (they are by design) and never `npm install` inside integration folders.
+| Symptom | Check |
+|---|---|
+| MCP tool missing (OpenCode2) | `opencode2 plugin list`; a `(failed)` entry clears on `opencode2 service restart` |
+| MCP tool missing (Claude) | `claude plugin list`; reinstall the plugin after manifest changes, then restart |
+| No events | `jev events --n 20`; the log honors `JEV_DATA_DIR` |
+| Config error from a tool | `TYPESAFE_API_KEY` not visible to the harness process |
+| Pi/OMP extension fails to load | jiti resolves relative paths lexically; keep extensions self-contained and never `npm install` inside integration folders |
+| Commit hook silent | `command -v jev` fails in the hook's environment, or the message passed the check |
+| Dashboard stale/empty | restart the meter after meter-code edits; see [metrics.md](metrics.md) |
 
 ## Policy: log-first
 
