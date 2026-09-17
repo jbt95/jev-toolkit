@@ -129,8 +129,10 @@ export const ReviewFile = Schema.Struct({
 export const PreviousDimension = Schema.Struct({
   dimension: Schema.String,
   applicable: Schema.Boolean,
-  score: Schema.Number,
-  confidence: Schema.Number,
+  // Round-tripping the tool output is expected: non-applicable dimensions may
+  // carry null or omit the fields entirely.
+  score: Schema.optional(Schema.NullOr(Schema.Number)),
+  confidence: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
 export const PreviousEvaluation = Schema.Struct({
@@ -192,7 +194,10 @@ const previousByDimension = (
   for (const entry of input.previousEvaluation?.dimensions ?? []) {
     const dimension = REVIEW_DIMENSIONS.find((candidate) => candidate === entry.dimension);
     if (dimension === undefined || !entry.applicable) continue;
-    previous.set(dimension, { score: entry.score, confidence: entry.confidence });
+    const score = Option.fromNullishOr(entry.score);
+    const confidence = Option.fromNullishOr(entry.confidence);
+    if (Option.isNone(score) || Option.isNone(confidence)) continue;
+    previous.set(dimension, { score: score.value, confidence: confidence.value });
   }
   return previous;
 };

@@ -130,6 +130,14 @@ npm run lint && npm run format:check && npm run typecheck && npm test
 Tests are offline by design: fake transports, temp dirs, `127.0.0.1` only, no
 module mocking.
 
+An end-to-end smoke test (live TypeSafe API plus a real opencode2 session) is
+operator-run and never part of `npm test`:
+
+```console
+scripts/smoke-opencode2.sh            # agent session + operator checks
+scripts/smoke-opencode2.sh --no-agent # operator checks only
+```
+
 ## Privacy
 
 Automated flows (`audit`, `label`, `triage`, `check`, hooks) sanitize before

@@ -46,6 +46,21 @@ describe("review profile", () => {
     expect(questions["security_direction"]).toBeUndefined();
   });
 
+  it("tolerates a verbatim previous evaluation with null fields", () => {
+    const questions = reviewQuestions({
+      diff: "x",
+      previousEvaluation: {
+        dimensions: [
+          { dimension: "correctness", applicable: true, score: 1, confidence: 0.8 },
+          { dimension: "security", applicable: false, score: null, confidence: null },
+        ],
+      },
+    });
+
+    expect(questions["correctness_direction"]).toBeDefined();
+    expect(questions["security_direction"]).toBeUndefined();
+  });
+
   it("evaluates gates, scores, directions, and the top weakness", () => {
     const input = {
       diff: "x",
