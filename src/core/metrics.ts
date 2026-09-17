@@ -1,5 +1,6 @@
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService } from "./events.ts";
 import type { JevEvent } from "./schema.ts";
@@ -91,22 +92,25 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
         if (event.status === "ok") entry.ok += 1;
         else entry.error += 1;
         calls.set(event.harness, entry);
-        if (event.tokens !== undefined) {
+        const eventTokens = Option.fromUndefinedOr(event.tokens);
+        if (Option.isSome(eventTokens)) {
           const tokenEntry = tokens.get(event.harness) ?? { input: 0, output: 0 };
-          tokenEntry.input += event.tokens.input;
-          tokenEntry.output += event.tokens.output;
+          tokenEntry.input += eventTokens.value.input;
+          tokenEntry.output += eventTokens.value.output;
           tokens.set(event.harness, tokenEntry);
         }
-        if (event.sessionID !== undefined) {
+        const eventSession = Option.fromUndefinedOr(event.sessionID);
+        if (Option.isSome(eventSession)) {
           const set = sessions.get(event.harness) ?? new Set<string>();
-          set.add(event.sessionID);
+          set.add(eventSession.value);
           sessions.set(event.harness, set);
         }
         const latencyHistogram = latency.get(event.harness) ?? newHistogram(LATENCY_BUCKETS);
         observe(latencyHistogram, LATENCY_BUCKETS, event.latencyMs / 1000);
         latency.set(event.harness, latencyHistogram);
-        if (event.answers !== undefined) {
-          for (const answer of Object.values(event.answers)) {
+        const eventAnswers = Option.fromUndefinedOr(event.answers);
+        if (Option.isSome(eventAnswers)) {
+          for (const answer of Object.values(eventAnswers.value)) {
             if (answer._tag === "noul") continue;
             const histogram = confidence.get(answer._tag) ?? newHistogram(CONFIDENCE_BUCKETS);
             observe(histogram, CONFIDENCE_BUCKETS, answer.confidence);

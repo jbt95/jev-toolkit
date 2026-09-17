@@ -35,7 +35,7 @@ const itemText = (item: { readonly content?: unknown }): string => {
   const content = item.content;
   if (isString(content)) return content;
   if (isTextArray(content)) {
-    return content.flatMap((part) => (part.text === undefined ? [] : [part.text])).join("\n");
+    return content.flatMap((part) => Option.toArray(Option.fromUndefinedOr(part.text))).join("\n");
   }
   return "";
 };

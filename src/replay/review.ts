@@ -24,9 +24,10 @@ const DEFAULT_DB =
   process.env.JEV_OPENCODE_DB ?? join(homedir(), ".local/share/opencode/opencode.db");
 const DEFAULT_OUT = join(homedir(), ".local/share/jev/review-fixtures");
 
-const flagValue = (argv: ReadonlyArray<string>, name: string): string | undefined => {
+const flagValue = (argv: ReadonlyArray<string>, name: string): Option.Option<string> => {
   const index = argv.indexOf(name);
-  return index === -1 ? undefined : argv[index + 1];
+  if (index === -1) return Option.none();
+  return Option.fromUndefinedOr(argv[index + 1]);
 };
 
 const isFindingLine = (line: string): boolean =>
@@ -112,7 +113,8 @@ const capture = async (date: string, outDir: string): Promise<void> => {
       const parsed = decodeMessage(decodedRow.value.data);
       if (Option.isNone(parsed)) continue;
       for (const part of parsed.value.content) {
-        if (part.text !== undefined) texts.push(part.text);
+        const text = Option.fromUndefinedOr(part.text);
+        if (Option.isSome(text)) texts.push(text.value);
       }
     }
     const findings = texts
@@ -184,11 +186,11 @@ const score = async (dir: string): Promise<void> => {
 const argv = process.argv.slice(2);
 if (argv.includes("--capture")) {
   await capture(
-    flagValue(argv, "--date") ?? new Date().toISOString().slice(0, 10),
-    flagValue(argv, "--out") ?? DEFAULT_OUT,
+    flagValue(argv, "--date").pipe(Option.getOrElse(() => new Date().toISOString().slice(0, 10))),
+    flagValue(argv, "--out").pipe(Option.getOrElse(() => DEFAULT_OUT)),
   );
 } else if (argv.includes("--score")) {
-  await score(flagValue(argv, "--dir") ?? DEFAULT_OUT);
+  await score(flagValue(argv, "--dir").pipe(Option.getOrElse(() => DEFAULT_OUT)));
 } else {
   console.error(
     "usage: src/replay/review.ts --capture --date YYYY-MM-DD [--out DIR] | --score [--dir DIR]",

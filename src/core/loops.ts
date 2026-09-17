@@ -72,7 +72,8 @@ export function makeLoopGuard(path: string): LoopGuardService {
             lastTs: value.lastTs,
             escalated: value.escalated,
           };
-          if (value.sample !== undefined) copy.sample = value.sample;
+          const sample = Option.fromUndefinedOr(value.sample);
+          if (Option.isSome(sample)) copy.sample = sample.value;
           state.set(key, copy);
         }
       }
@@ -105,8 +106,13 @@ export function makeLoopGuard(path: string): LoopGuardService {
         lastTs: now,
         escalated: (current?.escalated ?? false) || escalate,
       };
-      const nextSample = sample ?? current?.sample;
-      if (nextSample !== undefined) record.sample = nextSample;
+      const nextSample = Option.firstSomeOf([
+        Option.fromUndefinedOr(sample),
+        Option.fromUndefinedOr(current).pipe(
+          Option.flatMap((seen) => Option.fromUndefinedOr(seen.sample)),
+        ),
+      ]);
+      if (Option.isSome(nextSample)) record.sample = nextSample.value;
       state.set(fp, record);
       yield* writeState(state);
       return { count, escalated: escalate };
@@ -116,10 +122,13 @@ export function makeLoopGuard(path: string): LoopGuardService {
     Effect.gen(function* () {
       const state = yield* readState();
       return [...state.entries()]
-        .filter(([, record]) => record.sample !== undefined)
+        .filter(([, record]) => Option.isSome(Option.fromUndefinedOr(record.sample)))
         .sort(([fa, a], [fb, b]) => b.lastTs - a.lastTs || fa.localeCompare(fb))
         .slice(0, limit)
-        .map(([fp, record]) => ({ fingerprint: fp, sample: record.sample ?? "" }));
+        .map(([fp, record]) => ({
+          fingerprint: fp,
+          sample: Option.fromUndefinedOr(record.sample).pipe(Option.getOrElse(() => "")),
+        }));
     });
 
   return { check, recent };

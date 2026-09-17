@@ -91,14 +91,12 @@ const ok = (id: JsonValue, result: JsonValue): string =>
 const failure = (id: JsonValue, code: number, message: string): string =>
   JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } });
 
-const initializeResult = (params: JsonValue | undefined): JsonValue => {
-  let protocolVersion = DEFAULT_PROTOCOL_VERSION;
-  if (params !== undefined) {
-    const decoded = decodeInitializeParams(params);
-    if (Option.isSome(decoded) && decoded.value.protocolVersion !== undefined) {
-      protocolVersion = decoded.value.protocolVersion;
-    }
-  }
+const initializeResult = (params: Option.Option<JsonValue>): JsonValue => {
+  const protocolVersion = params.pipe(
+    Option.flatMap((value) => decodeInitializeParams(value)),
+    Option.flatMap((decoded) => Option.fromUndefinedOr(decoded.protocolVersion)),
+    Option.getOrElse(() => DEFAULT_PROTOCOL_VERSION),
+  );
   return {
     protocolVersion,
     capabilities: { tools: {} },
@@ -109,15 +107,18 @@ const initializeResult = (params: JsonValue | undefined): JsonValue => {
 
 const toolsCall = async (
   id: JsonValue,
-  params: JsonValue | undefined,
+  params: Option.Option<JsonValue>,
   deps: McpDeps,
 ): Promise<string> => {
-  const parsed = decodeToolCallParams(params);
+  const parsed = Option.flatMap(params, (value) => decodeToolCallParams(value));
   if (Option.isNone(parsed)) return failure(id, -32602, "tools/call requires { name, arguments? }");
   if (parsed.value.name !== TOOL_NAME) {
     return failure(id, -32602, `unknown tool '${parsed.value.name}'`);
   }
-  const result = await deps.call(parsed.value.arguments ?? {});
+  const args = Option.fromUndefinedOr(parsed.value.arguments).pipe(
+    Option.getOrElse((): JsonValue => ({})),
+  );
+  const result = await deps.call(args);
   if (result.ok) return ok(id, { content: [{ type: "text", text: result.text }] });
   return ok(id, { content: [{ type: "text", text: result.text }], isError: true });
 };
@@ -125,16 +126,22 @@ const toolsCall = async (
 export async function handleMcpRequest(line: string, deps: McpDeps): Promise<string | undefined> {
   const request = decodeRequest(line);
   if (Option.isNone(request)) return failure(null, -32700, "parse error");
-  const id = request.value.id ?? null;
-  if (request.value.jsonrpc !== "2.0" || request.value.method === undefined) {
+  const id = Option.fromUndefinedOr(request.value.id).pipe(Option.getOrElse((): JsonValue => null));
+  const method = Option.fromUndefinedOr(request.value.method);
+  if (Option.isNone(method)) {
     return failure(id, -32600, "invalid request");
   }
-  const method = request.value.method;
+  if (request.value.jsonrpc !== "2.0") {
+    return failure(id, -32600, "invalid request");
+  }
   // Notifications are acknowledgements and take no response.
-  if (method === "initialized" || method.startsWith("notifications/")) return undefined;
-  switch (method) {
+  if (method.value === "initialized" || method.value.startsWith("notifications/")) {
+    return undefined;
+  }
+  const params = Option.fromUndefinedOr(request.value.params);
+  switch (method.value) {
     case "initialize":
-      return ok(id, initializeResult(request.value.params));
+      return ok(id, initializeResult(params));
     case "ping":
       return ok(id, {});
     case "tools/list":
@@ -154,9 +161,9 @@ export async function handleMcpRequest(line: string, deps: McpDeps): Promise<str
         ],
       });
     case "tools/call":
-      return await toolsCall(id, request.value.params, deps);
+      return await toolsCall(id, params, deps);
     default:
-      return failure(id, -32601, `unknown method '${method}'`);
+      return failure(id, -32601, `unknown method '${method.value}'`);
   }
 }
 
@@ -178,7 +185,7 @@ export function createMcpDeps(
             harness,
             state: payload.state,
             questions: payload.questions,
-            model: payload.model ?? undefined,
+            model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
           }),
         ),
       );

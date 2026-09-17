@@ -1,5 +1,6 @@
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { AnswerMap, Question, QuestionMap } from "../core/schema.ts";
+import type { Answer, AnswerMap, Question, QuestionMap } from "../core/schema.ts";
 
 export const Finding = Schema.Struct({
   id: Schema.String,
@@ -76,34 +77,62 @@ export function routeTriage(findings: ReadonlyArray<Finding>, answers: AnswerMap
   const cosmetic: Array<Finding> = [];
   const questions: Array<Finding> = [];
   for (const finding of findings) {
-    const classAnswer = answers[`f_${finding.id}_class`];
-    const severityAnswer = answers[`f_${finding.id}_severity`];
-    const evidenceAnswer = answers[`f_${finding.id}_evidence`];
-    const choice = classAnswer?._tag === "choice" ? classAnswer : undefined;
-    if (choice === undefined || choice.confidence < CLASS_CONFIDENCE) {
+    const choice = Option.fromUndefinedOr(answers[`f_${finding.id}_class`]).pipe(
+      Option.filter(
+        (classAnswer): classAnswer is Extract<Answer, { readonly _tag: "choice" }> =>
+          classAnswer._tag === "choice",
+      ),
+    );
+    if (Option.isNone(choice) || choice.value.confidence < CLASS_CONFIDENCE) {
       questions.push(finding);
       continue;
     }
-    const severity = severityAnswer?._tag === "score" ? severityAnswer.score : 0;
-    const evidence = evidenceAnswer?._tag === "noul" ? evidenceAnswer.noul : 0;
-    if (choice.choice === "blocking" || severity >= SERIOUS_SEVERITY) {
+    const severity = Option.fromUndefinedOr(answers[`f_${finding.id}_severity`]).pipe(
+      Option.filter(
+        (severityAnswer): severityAnswer is Extract<Answer, { readonly _tag: "score" }> =>
+          severityAnswer._tag === "score",
+      ),
+      Option.map((severityAnswer) => severityAnswer.score),
+      Option.getOrElse(() => 0),
+    );
+    const evidence = Option.fromUndefinedOr(answers[`f_${finding.id}_evidence`]).pipe(
+      Option.filter(
+        (evidenceAnswer): evidenceAnswer is Extract<Answer, { readonly _tag: "noul" }> =>
+          evidenceAnswer._tag === "noul",
+      ),
+      Option.map((evidenceAnswer) => evidenceAnswer.noul),
+      Option.getOrElse(() => 0),
+    );
+    if (choice.value.choice === "blocking" || severity >= SERIOUS_SEVERITY) {
       if (evidence >= EVIDENCE_FLOOR) blockers.push(finding);
       else questions.push(finding);
       continue;
     }
-    if (choice.choice === "cosmetic") {
+    if (choice.value.choice === "cosmetic") {
       cosmetic.push(finding);
       continue;
     }
     questions.push(finding);
   }
-  const substantive = answers["review_substantive"];
-  const truncatedAnswer = answers["truncated"];
+  const substantive = Option.fromUndefinedOr(answers["review_substantive"]).pipe(
+    Option.filter(
+      (answer): answer is Extract<Answer, { readonly _tag: "noul" }> => answer._tag === "noul",
+    ),
+    Option.map((answer) => answer.noul >= 0.5),
+    Option.getOrElse(() => true),
+  );
+  const truncated = Option.fromUndefinedOr(answers["truncated"]).pipe(
+    Option.filter(
+      (answer): answer is Extract<Answer, { readonly _tag: "noul" }> => answer._tag === "noul",
+    ),
+    Option.map((answer) => answer.noul >= 0.5),
+    Option.getOrElse(() => false),
+  );
   return {
     blockers,
     cosmetic,
     questions,
-    reviewSubstantive: substantive?._tag === "noul" ? substantive.noul >= 0.5 : true,
-    truncated: truncatedAnswer?._tag === "noul" ? truncatedAnswer.noul >= 0.5 : false,
+    reviewSubstantive: substantive,
+    truncated,
   };
 }

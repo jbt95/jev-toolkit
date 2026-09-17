@@ -1,3 +1,4 @@
+import * as Option from "effect/Option";
 import { noulValue } from "../core/answers.ts";
 import type { AnswerMap, Question, QuestionMap } from "../core/schema.ts";
 
@@ -36,7 +37,8 @@ const RULE_INSTRUCTIONS: Record<CommitRule, string> = {
  */
 export const commitQuestions = (input: CommitInput): QuestionMap => {
   const questions: Record<string, Question> = {};
-  if (input.spec !== undefined) {
+  const spec = Option.fromUndefinedOr(input.spec);
+  if (Option.isSome(spec)) {
     for (const rule of COMMIT_RULES) {
       questions[`p_${rule}`] = {
         _tag: "noul",
@@ -44,12 +46,16 @@ export const commitQuestions = (input: CommitInput): QuestionMap => {
       };
     }
   }
+  const specSuffix = Option.map(
+    spec,
+    () => " Judge it against the documented spec in `spec`.",
+  ).pipe(Option.getOrElse(() => ""));
   for (const rule of COMMIT_RULES) {
     questions[rule] = {
       _tag: "noul",
       instructions:
         `Does this commit message ${RULE_INSTRUCTIONS[rule]}?` +
-        (input.spec === undefined ? "" : " Judge it against the documented spec in `spec`.") +
+        specSuffix +
         ` Message: "${input.message}"`,
     };
   }
@@ -72,10 +78,12 @@ export function verdictFor(input: {
   if (subject.trim().length === 0) failed.push("subject-missing");
   if (subject.length > SUBJECT_LIMIT) failed.push("subject-too-long");
   if (!CONVENTIONAL.test(subject)) failed.push("format");
+  const profile = Option.fromUndefinedOr(input.profile);
   for (const rule of COMMIT_RULES) {
-    if (input.profile !== undefined && noulValue(input.profile, `p_${rule}`) < PROFILE_THRESHOLD) {
-      continue;
-    }
+    const required = Option.map(profile, (answers) => noulValue(answers, `p_${rule}`)).pipe(
+      Option.getOrElse(() => PROFILE_THRESHOLD),
+    );
+    if (required < PROFILE_THRESHOLD) continue;
     if (noulValue(input.answers, rule) < NOUL_THRESHOLD) failed.push(rule);
   }
   return { passed: failed.length === 0, failed };

@@ -44,7 +44,7 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import { Harness, QuestionMap } from "../core/schema.ts";
+import { Harness, QuestionMap, type Answer } from "../core/schema.ts";
 import { clip, redact } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
@@ -102,9 +102,10 @@ const readStdin = (): Effect.Effect<string, string> =>
     catch: () => "failed to read stdin",
   });
 
-const flag = (argv: ReadonlyArray<string>, name: string): string | undefined => {
+const flag = (argv: ReadonlyArray<string>, name: string): Option.Option<string> => {
   const index = argv.indexOf(name);
-  return index === -1 ? undefined : argv[index + 1];
+  if (index === -1) return Option.none();
+  return Option.fromUndefinedOr(argv[index + 1]);
 };
 
 const parseSinceMs = (value: string): number => {
@@ -210,11 +211,11 @@ const gitLog = async (repo: string, count: number): Promise<ReadonlyArray<GitCom
 };
 
 /** Harness id from JEV_HARNESS when valid, else the fallback. */
-const harnessFromEnv = (fallback: Harness): Harness => {
-  const value = process.env.JEV_HARNESS;
-  const decoded = value === undefined ? Option.none() : Schema.decodeUnknownOption(Harness)(value);
-  return Option.isSome(decoded) ? decoded.value : fallback;
-};
+const harnessFromEnv = (fallback: Harness): Harness =>
+  Option.fromUndefinedOr(process.env.JEV_HARNESS).pipe(
+    Option.flatMap((value) => Schema.decodeUnknownOption(Harness)(value)),
+    Option.getOrElse(() => fallback),
+  );
 
 export type CliServices = JevClient | EventLog | LoopGuard;
 
@@ -241,7 +242,7 @@ export function runCli(
             harness,
             state: payload.state,
             questions: payload.questions,
-            model: payload.model ?? undefined,
+            model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
           })
           .pipe(Effect.mapError(describeJevError));
         yield* Effect.sync(() => {
@@ -251,15 +252,13 @@ export function runCli(
       }
       case "events": {
         const log = yield* EventLog;
-        const harnessFlag = flag(rest, "--harness");
-        const decodedHarness =
-          harnessFlag === undefined
-            ? Option.none()
-            : Schema.decodeUnknownOption(Harness)(harnessFlag);
-        const requested = Number.parseInt(flag(rest, "--n") ?? "10", 10);
+        const decodedHarness = Option.flatMap(flag(rest, "--harness"), (harnessFlag) =>
+          Schema.decodeUnknownOption(Harness)(harnessFlag),
+        );
+        const requested = Number.parseInt(flag(rest, "--n").pipe(Option.getOrElse(() => "10")), 10);
         const limit = Number.isNaN(requested) ? 10 : requested;
         const events = yield* log
-          .read(Option.isSome(decodedHarness) ? { harness: decodedHarness.value } : {})
+          .read({ harness: Option.getOrUndefined(decodedHarness) })
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
         const tail = events.slice(-limit);
         yield* Effect.sync(() => {
@@ -271,7 +270,7 @@ export function runCli(
         const client = yield* JevClient;
         const harness = harnessFromEnv("script");
         if (rest[0] === "prompts") {
-          const sinceMs = parseSinceMs(flag(rest, "--since") ?? "7d");
+          const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "7d")));
           const now = yield* Clock.currentTimeMillis;
           const sinceIso = new Date(now - sinceMs).toISOString();
           const messages = yield* extractOpencode(opencodeDbPath(), sinceIso, "user").pipe(
@@ -309,20 +308,34 @@ export function runCli(
               regexTagged: regexTagged.filter(Boolean).length,
               detected: detectedIndexes.size,
               missed: missed.length,
-              missedExamples: missed.slice(0, 5).flatMap((index) => {
-                const message = messages[index];
-                return message === undefined ? [] : [message.text.slice(0, 100)];
-              }),
+              missedExamples: missed
+                .slice(0, 5)
+                .flatMap((index) =>
+                  Option.toArray(
+                    Option.map(Option.fromUndefinedOr(messages[index]), (message) =>
+                      message.text.slice(0, 100),
+                    ),
+                  ),
+                ),
               detectedExamples: [...detectedIndexes.entries()]
                 .slice(0, 5)
-                .flatMap(([index, kind]) => {
-                  const message = messages[index];
-                  return message === undefined ? [] : [`${kind}: ${message.text.slice(0, 90)}`];
-                }),
-              noiseExamples: noise.slice(0, 5).flatMap((index) => {
-                const message = messages[index];
-                return message === undefined ? [] : [message.text.slice(0, 100)];
-              }),
+                .flatMap(([index, kind]) =>
+                  Option.toArray(
+                    Option.map(
+                      Option.fromUndefinedOr(messages[index]),
+                      (message) => `${kind}: ${message.text.slice(0, 90)}`,
+                    ),
+                  ),
+                ),
+              noiseExamples: noise
+                .slice(0, 5)
+                .flatMap((index) =>
+                  Option.toArray(
+                    Option.map(Option.fromUndefinedOr(messages[index]), (message) =>
+                      message.text.slice(0, 100),
+                    ),
+                  ),
+                ),
             });
           });
           return 0;
@@ -337,8 +350,8 @@ export function runCli(
         }
         const log = yield* EventLog;
         const dryRun = rest.includes("--dry-run");
-        const harnessFlag = flag(rest, "--harness") ?? "all";
-        const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
+        const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
+        const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
         const now = yield* Clock.currentTimeMillis;
         const sinceIso = new Date(now - sinceMs).toISOString();
         const wants = (harness: string): boolean =>
@@ -388,8 +401,9 @@ export function runCli(
             })
             .pipe(Effect.mapError(describeJevError));
           for (const found of detectedClaims(result.answers, batch.length)) {
-            const message = batch[found.index];
-            if (message !== undefined) detected.push(toDetectedOpportunity(message, found.kind));
+            const message = Option.fromUndefinedOr(batch[found.index]);
+            if (Option.isSome(message))
+              detected.push(toDetectedOpportunity(message.value, found.kind));
           }
         }
 
@@ -399,8 +413,10 @@ export function runCli(
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
         const sessionQuestions = new Map<string, Array<string>>();
         for (const event of events) {
-          if (event._tag === "call" && event.sessionID !== undefined) {
-            const key = `${event.harness}|${event.sessionID}`;
+          if (event._tag === "call") {
+            const sessionID = Option.fromUndefinedOr(event.sessionID);
+            if (Option.isNone(sessionID)) continue;
+            const key = `${event.harness}|${sessionID.value}`;
             const list = sessionQuestions.get(key) ?? [];
             for (const question of event.questions) {
               if (!list.includes(question.id)) list.push(question.id);
@@ -417,8 +433,10 @@ export function runCli(
         }
         const correlated: Array<CorrelatedOpportunity> = [];
         for (const [key, items] of bySession) {
-          const questions = sessionQuestions.get(key);
-          if (questions === undefined || questions.length === 0) {
+          const questions = Option.fromUndefinedOr(sessionQuestions.get(key)).pipe(
+            Option.filter((list) => list.length > 0),
+          );
+          if (Option.isNone(questions)) {
             for (const item of items) correlated.push({ ...item, matched: false });
             continue;
           }
@@ -428,7 +446,7 @@ export function runCli(
               .ask({
                 harness,
                 state: {
-                  sessionQuestions: questions.slice(0, 40),
+                  sessionQuestions: questions.value.slice(0, 40),
                   claims: batch.map((item, index) => ({
                     id: `a${index}`,
                     pattern: item.pattern,
@@ -476,9 +494,12 @@ export function runCli(
           });
           return 1;
         }
-        const sinceMs = parseSinceMs(flag(rest, "--since") ?? "24h");
-        const harnessFlag = flag(rest, "--harness") ?? "all";
-        const requested = Number.parseInt(flag(rest, "--limit") ?? "50", 10);
+        const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
+        const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
+        const requested = Number.parseInt(
+          flag(rest, "--limit").pipe(Option.getOrElse(() => "50")),
+          10,
+        );
         const limit = Number.isNaN(requested) ? 50 : requested;
         const dryRun = rest.includes("--dry-run");
         const now = yield* Clock.currentTimeMillis;
@@ -525,10 +546,39 @@ export function runCli(
         const harness = harnessFromEnv("script");
         const outcomeValues = ["shipped", "blocked", "abandoned", "ongoing"] as const;
         const wasteValues = ["none", "loop", "truncation", "retries", "waiting_on_human"] as const;
-        const pickOutcome = (value: string | undefined): (typeof outcomeValues)[number] =>
-          outcomeValues.find((candidate) => candidate === value) ?? "ongoing";
-        const pickWaste = (value: string | undefined): (typeof wasteValues)[number] =>
-          wasteValues.find((candidate) => candidate === value) ?? "none";
+        const pickOutcome = (answer: Answer | undefined): (typeof outcomeValues)[number] =>
+          Option.fromUndefinedOr(answer).pipe(
+            Option.filter(
+              (choice): choice is Extract<Answer, { readonly _tag: "choice" }> =>
+                choice._tag === "choice",
+            ),
+            Option.flatMap((choice) =>
+              Option.fromUndefinedOr(
+                outcomeValues.find((candidate) => candidate === choice.choice),
+              ),
+            ),
+            Option.getOrElse((): (typeof outcomeValues)[number] => "ongoing"),
+          );
+        const pickWaste = (answer: Answer | undefined): (typeof wasteValues)[number] =>
+          Option.fromUndefinedOr(answer).pipe(
+            Option.filter(
+              (choice): choice is Extract<Answer, { readonly _tag: "choice" }> =>
+                choice._tag === "choice",
+            ),
+            Option.flatMap((choice) =>
+              Option.fromUndefinedOr(wasteValues.find((candidate) => candidate === choice.choice)),
+            ),
+            Option.getOrElse((): (typeof wasteValues)[number] => "none"),
+          );
+        const scoreOrZero = (answer: Answer | undefined): number =>
+          Option.fromUndefinedOr(answer).pipe(
+            Option.filter(
+              (score): score is Extract<Answer, { readonly _tag: "score" }> =>
+                score._tag === "score",
+            ),
+            Option.map((score) => score.score),
+            Option.getOrElse(() => 0),
+          );
 
         let labeled = 0;
         for (let start = 0; start < digests.length; start += 10) {
@@ -537,25 +587,30 @@ export function runCli(
             .ask({ harness, state: { sessions: batch }, questions: labelQuestions(batch) })
             .pipe(Effect.mapError(describeJevError));
           for (let index = 0; index < batch.length; index++) {
-            const digest = batch[index];
-            if (digest === undefined) continue;
+            const digest = Option.fromUndefinedOr(batch[index]);
+            if (Option.isNone(digest)) continue;
             const outcomeAnswer = result.answers[`s${index}_outcome`];
             const frictionAnswer = result.answers[`s${index}_friction`];
             const wasteAnswer = result.answers[`s${index}_waste`];
-            const taskAnswer = result.answers["task_type"];
+            const taskAnswer = Option.fromUndefinedOr(result.answers["task_type"]).pipe(
+              Option.filter(
+                (task): task is Extract<Answer, { readonly _tag: "choice" }> =>
+                  task._tag === "choice",
+              ),
+              Option.map((task) => task.choice),
+              Option.getOrElse(() => "other"),
+            );
             const eventTime = yield* Clock.currentTimeMillis;
             yield* log
               .append({
                 _tag: "session_label",
                 ts: new Date(eventTime).toISOString(),
-                harness: digest.harness,
-                sessionID: digest.sessionID,
-                outcome: pickOutcome(
-                  outcomeAnswer?._tag === "choice" ? outcomeAnswer.choice : undefined,
-                ),
-                friction: frictionAnswer?._tag === "score" ? frictionAnswer.score : 0,
-                waste: pickWaste(wasteAnswer?._tag === "choice" ? wasteAnswer.choice : undefined),
-                taskType: taskAnswer?._tag === "choice" ? taskAnswer.choice : "other",
+                harness: digest.value.harness,
+                sessionID: digest.value.sessionID,
+                outcome: pickOutcome(outcomeAnswer),
+                friction: scoreOrZero(frictionAnswer),
+                waste: pickWaste(wasteAnswer),
+                taskType: taskAnswer,
               })
               .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
             labeled += 1;
@@ -579,35 +634,43 @@ export function runCli(
         const log = yield* EventLog;
         const harness = harnessFromEnv("script");
         const specFlag = flag(rest, "--spec");
-        const rawSpec =
-          specFlag === undefined
-            ? undefined
-            : yield* Effect.tryPromise({
-                try: () => readFile(specFlag, "utf8"),
-                catch: () => `cannot read spec file: ${specFlag}`,
-              });
-        const spec = rawSpec === undefined ? undefined : clip(redact(rawSpec), 1200);
+        const rawSpec: Option.Option<string> = yield* Option.match(specFlag, {
+          onNone: () => Effect.succeed(Option.none<string>()),
+          onSome: (specFile) =>
+            Effect.tryPromise({
+              try: () => readFile(specFile, "utf8"),
+              catch: () => `cannot read spec file: ${specFile}`,
+            }).pipe(Effect.map(Option.some)),
+        });
+        const spec = Option.map(rawSpec, (raw) => clip(redact(raw), 1200));
         // One call per message judging the four rules; with a spec, the same
         // call also answers which rules the repo's spec actually requires.
         const judge = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
           Effect.gen(function* () {
             const message = clip(redact(rawMessage), 1500);
             const base = { message };
-            const state = spec === undefined ? base : { ...base, spec };
+            const state = Option.match(spec, {
+              onNone: () => base,
+              onSome: (documented) => ({ ...base, spec: documented }),
+            });
             const result = yield* client
-              .ask({ harness, state, questions: commitQuestions({ message, spec }) })
+              .ask({
+                harness,
+                state,
+                questions: commitQuestions({ message, spec: Option.getOrUndefined(spec) }),
+              })
               .pipe(Effect.mapError(describeJevError));
             return verdictFor({
               message: rawMessage,
               answers: result.answers,
-              profile: spec === undefined ? undefined : result.answers,
+              profile: Option.getOrUndefined(Option.map(spec, () => result.answers)),
             });
           });
         const replayFlag = flag(rest, "--replay");
-        if (replayFlag !== undefined) {
-          const requested = Number.parseInt(replayFlag, 10);
+        if (Option.isSome(replayFlag)) {
+          const requested = Number.parseInt(replayFlag.value, 10);
           const count = Number.isNaN(requested) ? 10 : requested;
-          const repo = flag(rest, "--repo") ?? ".";
+          const repo = flag(rest, "--repo").pipe(Option.getOrElse(() => "."));
           const commits = yield* Effect.tryPromise({
             try: () => gitLog(repo, count),
             catch: () => `git log failed in ${repo}`,
@@ -634,7 +697,7 @@ export function runCli(
           return 0;
         }
         const messageFile = flag(rest, "--message-file");
-        if (messageFile === undefined) {
+        if (Option.isNone(messageFile)) {
           yield* Effect.sync(() => {
             console.error(
               "usage: jev check commit --message-file FILE [--spec FILE] | jev check commit --replay N [--repo DIR] [--spec FILE]",
@@ -643,8 +706,8 @@ export function runCli(
           return 1;
         }
         const message = yield* Effect.tryPromise({
-          try: () => readFile(messageFile, "utf8"),
-          catch: () => `cannot read message file: ${messageFile}`,
+          try: () => readFile(messageFile.value, "utf8"),
+          catch: () => `cannot read message file: ${messageFile.value}`,
         });
         const verdict = yield* judge(message);
         const now = yield* Clock.currentTimeMillis;
@@ -666,7 +729,7 @@ export function runCli(
       case "triage": {
         if (rest[0] === "review") {
           const inputFlag = flag(rest, "--input");
-          if (inputFlag === undefined) {
+          if (Option.isNone(inputFlag)) {
             yield* Effect.sync(() => {
               console.error("usage: jev triage review --input findings.json");
             });
@@ -676,8 +739,8 @@ export function runCli(
           const log = yield* EventLog;
           const harness = harnessFromEnv("cli");
           const raw = yield* Effect.tryPromise({
-            try: () => readFile(inputFlag, "utf8"),
-            catch: () => `cannot read findings file: ${inputFlag}`,
+            try: () => readFile(inputFlag.value, "utf8"),
+            catch: () => `cannot read findings file: ${inputFlag.value}`,
           });
           const review = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewInput))(
             raw,
@@ -734,10 +797,11 @@ export function runCli(
         const transcriptFlag = flag(rest, "--transcript");
         let failureText: string;
         let source: string;
-        if (transcriptFlag !== undefined) {
+        if (Option.isSome(transcriptFlag)) {
+          const transcriptPath = transcriptFlag.value;
           const raw = yield* Effect.tryPromise({
-            try: () => readFile(transcriptFlag, "utf8"),
-            catch: () => `cannot read transcript: ${transcriptFlag}`,
+            try: () => readFile(transcriptPath, "utf8"),
+            catch: () => `cannot read transcript: ${transcriptPath}`,
           });
           const candidates = transcriptFailureCandidates(raw);
           if (candidates.length === 0) {
@@ -747,7 +811,7 @@ export function runCli(
             return 1;
           }
           if (candidates.length === 1) {
-            failureText = candidates[0] ?? "";
+            failureText = Option.fromUndefinedOr(candidates[0]).pipe(Option.getOrElse(() => ""));
           } else {
             const selection = yield* client
               .ask({
@@ -756,25 +820,30 @@ export function runCli(
                 questions: transcriptSelectionQuestions({ candidates }),
               })
               .pipe(Effect.mapError(describeJevError));
-            const answer = selection.answers["failure_index"];
-            const index =
-              answer?._tag === "choice"
-                ? Number.parseInt(answer.choice.replace("candidate_", ""), 10)
-                : Number.NaN;
-            const selected = Number.isNaN(index) ? undefined : candidates[index];
-            if (selected === undefined) {
+            const index = Option.fromUndefinedOr(selection.answers["failure_index"]).pipe(
+              Option.filter(
+                (answer): answer is Extract<Answer, { readonly _tag: "choice" }> =>
+                  answer._tag === "choice",
+              ),
+              Option.map((answer) => Number.parseInt(answer.choice.replace("candidate_", ""), 10)),
+              Option.filter((parsed) => !Number.isNaN(parsed)),
+              Option.getOrElse(() => -1),
+            );
+            const selected = Option.fromUndefinedOr(candidates[index]);
+            if (Option.isNone(selected)) {
               yield* Effect.sync(() => {
                 console.error("no failing entry selected in the transcript");
               });
               return 1;
             }
-            failureText = selected;
+            failureText = selected.value;
           }
           source = "transcript";
-        } else if (textFlag !== undefined && textFlag !== "-") {
+        } else if (Option.isSome(textFlag) && textFlag.value !== "-") {
+          const textPath = textFlag.value;
           failureText = yield* Effect.tryPromise({
-            try: () => readFile(textFlag, "utf8"),
-            catch: () => `cannot read failure text: ${textFlag}`,
+            try: () => readFile(textPath, "utf8"),
+            catch: () => `cannot read failure text: ${textPath}`,
           });
           source = "text";
         } else {
@@ -803,12 +872,16 @@ export function runCli(
               questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
             })
             .pipe(Effect.mapError(describeJevError));
-          const answer = selection.answers["same_as"];
-          if (answer?._tag === "choice") {
-            const index = Number.parseInt(answer.choice.replace("recent_", ""), 10);
-            const matched = Number.isNaN(index) ? undefined : similar[index];
-            if (matched !== undefined) canonical = matched.fingerprint;
-          }
+          const answer = Option.fromUndefinedOr(selection.answers["same_as"]).pipe(
+            Option.filter(
+              (same): same is Extract<Answer, { readonly _tag: "choice" }> =>
+                same._tag === "choice",
+            ),
+            Option.map((same) => Number.parseInt(same.choice.replace("recent_", ""), 10)),
+            Option.filter((parsed) => !Number.isNaN(parsed)),
+            Option.flatMap((parsed) => Option.fromUndefinedOr(similar[parsed])),
+          );
+          if (Option.isSome(answer)) canonical = answer.value.fingerprint;
         }
         const loop = yield* guard
           .check(canonical, safeFailure.slice(0, 400))
@@ -821,11 +894,30 @@ export function runCli(
           })
           .pipe(Effect.mapError(describeJevError));
 
-        const classAnswer = result.answers["class"];
-        const blocksAnswer = result.answers["blocks_work"];
-        const suppressAnswer = result.answers["safe_to_suppress"];
-        const blocks = blocksAnswer?._tag === "noul" ? blocksAnswer.noul : 0;
-        const suppress = suppressAnswer?._tag === "noul" ? suppressAnswer.noul : 0;
+        const classAnswer = Option.fromUndefinedOr(result.answers["class"]).pipe(
+          Option.filter(
+            (classified): classified is Extract<Answer, { readonly _tag: "choice" }> =>
+              classified._tag === "choice",
+          ),
+        );
+        const blocksAnswer = Option.fromUndefinedOr(result.answers["blocks_work"]).pipe(
+          Option.filter(
+            (blocks): blocks is Extract<Answer, { readonly _tag: "noul" }> =>
+              blocks._tag === "noul",
+          ),
+        );
+        const suppressAnswer = Option.fromUndefinedOr(result.answers["safe_to_suppress"]).pipe(
+          Option.filter(
+            (suppress): suppress is Extract<Answer, { readonly _tag: "noul" }> =>
+              suppress._tag === "noul",
+          ),
+        );
+        const blocks = Option.map(blocksAnswer, (answer) => answer.noul).pipe(
+          Option.getOrElse(() => 0),
+        );
+        const suppress = Option.map(suppressAnswer, (answer) => answer.noul).pipe(
+          Option.getOrElse(() => 0),
+        );
         const now = yield* Clock.currentTimeMillis;
         yield* log
           .append({
@@ -842,15 +934,15 @@ export function runCli(
           })
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
         yield* Effect.sync(() => {
-          if (classAnswer?._tag === "choice") {
+          if (Option.isSome(classAnswer)) {
             console.log(
-              `failure class: ${classAnswer.choice} (confidence ${classAnswer.confidence})`,
+              `failure class: ${classAnswer.value.choice} (confidence ${classAnswer.value.confidence})`,
             );
           }
-          if (blocksAnswer?._tag === "noul")
-            console.log(`blocks_work: p(yes)=${blocksAnswer.noul}`);
-          if (suppressAnswer?._tag === "noul") {
-            console.log(`safe_to_suppress: p(yes)=${suppressAnswer.noul}`);
+          if (Option.isSome(blocksAnswer))
+            console.log(`blocks_work: p(yes)=${blocksAnswer.value.noul}`);
+          if (Option.isSome(suppressAnswer)) {
+            console.log(`safe_to_suppress: p(yes)=${suppressAnswer.value.noul}`);
           }
           if (loop.escalated) {
             console.log(
@@ -896,9 +988,14 @@ export function runCli(
           return 1;
         }
         const log = yield* EventLog;
-        const portFlag = flag(rest, "--port") ?? process.env.JEV_METER_PORT;
-        const requestedPort = portFlag === undefined ? 8788 : Number.parseInt(portFlag, 10);
-        const port = Number.isNaN(requestedPort) ? 8788 : requestedPort;
+        const port = Option.firstSomeOf([
+          flag(rest, "--port"),
+          Option.fromUndefinedOr(process.env.JEV_METER_PORT),
+        ]).pipe(
+          Option.map((raw) => Number.parseInt(raw, 10)),
+          Option.filter((parsed) => !Number.isNaN(parsed)),
+          Option.getOrElse(() => 8788),
+        );
         return yield* serveMeter(port, log).pipe(
           Effect.mapError(() => "meter failed to start (port in use?)"),
         );
@@ -922,14 +1019,17 @@ export function runCli(
   }).pipe(Effect.provide(layers));
 }
 
-const isEntrypoint =
-  process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+const isEntrypoint = Option.fromUndefinedOr(process.argv[1]).pipe(
+  Option.exists((entry) => realpathSync(entry) === fileURLToPath(import.meta.url)),
+);
 
 if (isEntrypoint) {
-  const keyFromEnv = process.env.TYPESAFE_API_KEY;
-  const apiKey = keyFromEnv === undefined ? Option.none() : Option.some(keyFromEnv);
+  const apiKey = Option.fromUndefinedOr(process.env.TYPESAFE_API_KEY);
   // The transport is only reached when a key exists; the client rejects earlier otherwise.
-  const transport = createFetchTransport(apiEndpoint(), keyFromEnv ?? "");
+  const transport = createFetchTransport(
+    apiEndpoint(),
+    Option.getOrElse(apiKey, () => ""),
+  );
   const eventLog = EventLogLive(eventsPath());
   const layers = Layer.mergeAll(
     eventLog,

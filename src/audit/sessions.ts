@@ -42,7 +42,7 @@ const ContentItem = Schema.Struct({
 });
 
 const textOf = (content: ReadonlyArray<{ readonly text?: string }>): string =>
-  content.flatMap((item) => (item.text === undefined ? [] : [item.text])).join("\n");
+  content.flatMap((item) => Option.toArray(Option.fromUndefinedOr(item.text))).join("\n");
 
 const countTools = (
   content: ReadonlyArray<{
@@ -53,9 +53,13 @@ const countTools = (
   toolCounts: Record<string, number>,
 ): void => {
   for (const item of content) {
-    const name = item.toolName ?? item.name ?? item.type;
-    if (name === undefined || name === "text") continue;
-    toolCounts[name] = (toolCounts[name] ?? 0) + 1;
+    const name = Option.firstSomeOf([
+      Option.fromUndefinedOr(item.toolName),
+      Option.fromUndefinedOr(item.name),
+      Option.fromUndefinedOr(item.type),
+    ]).pipe(Option.filter((candidate) => candidate !== "text"));
+    if (Option.isNone(name)) continue;
+    toolCounts[name.value] = (toolCounts[name.value] ?? 0) + 1;
   }
 };
 
@@ -95,11 +99,15 @@ export function digestClaude(
           const decoded = decodeClaude(line);
           if (Option.isNone(decoded)) continue;
           const entry = decoded.value;
-          if (startedAt === "" && entry.timestamp !== undefined) startedAt = entry.timestamp;
-          if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          const message = entry.message;
-          if (message === undefined) continue;
-          const content = message.content;
+          const firstSeen = Option.fromUndefinedOr(entry.timestamp);
+          if (startedAt === "" && Option.isSome(firstSeen)) startedAt = firstSeen.value;
+          const tooOld = Option.map(firstSeen, (timestamp) => timestamp < sinceIso).pipe(
+            Option.getOrElse(() => false),
+          );
+          if (tooOld) continue;
+          const message = Option.fromUndefinedOr(entry.message);
+          if (Option.isNone(message)) continue;
+          const content = message.value.content;
           if (entry.type === "assistant") {
             assistantTurns += 1;
             if (!isString(content)) {
@@ -187,9 +195,10 @@ export function digestOpencode(
             if (!isString(data)) continue;
             if (messageType === "user") {
               const decoded = decodeOpencodeUser(data);
-              if (Option.isSome(decoded) && decoded.value.text !== undefined) {
-                if (userPrompts.length < 3 && decoded.value.text.trim().length > 0) {
-                  userPrompts.push(prompt(decoded.value.text));
+              const text = Option.flatMap(decoded, (user) => Option.fromUndefinedOr(user.text));
+              if (Option.isSome(text)) {
+                if (userPrompts.length < 3 && text.value.trim().length > 0) {
+                  userPrompts.push(prompt(text.value));
                 }
               }
               continue;
@@ -210,8 +219,14 @@ export function digestOpencode(
             toolCounts,
             errorCount,
           };
-          if (cost !== undefined) digests.push({ ...digest, costUsd: cost });
-          else digests.push(digest);
+          digests.push(
+            Option.fromUndefinedOr(cost).pipe(
+              Option.match({
+                onNone: () => digest,
+                onSome: (costUsd) => ({ ...digest, costUsd }),
+              }),
+            ),
+          );
         }
         return digests;
       } finally {
@@ -262,21 +277,26 @@ export function digestPiOmp(
           const decoded = decodePiEntry(line);
           if (Option.isNone(decoded)) continue;
           const entry = decoded.value;
-          if (entry.type === "session" && entry.id !== undefined) sessionID = entry.id;
-          if (startedAt === "" && entry.timestamp !== undefined) startedAt = entry.timestamp;
-          if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          const message = entry.message;
-          if (message === undefined) continue;
-          if (message.role === "assistant") {
+          const session = Option.fromUndefinedOr(entry.id);
+          if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
+          const firstSeen = Option.fromUndefinedOr(entry.timestamp);
+          if (startedAt === "" && Option.isSome(firstSeen)) startedAt = firstSeen.value;
+          const tooOld = Option.map(firstSeen, (timestamp) => timestamp < sinceIso).pipe(
+            Option.getOrElse(() => false),
+          );
+          if (tooOld) continue;
+          const message = Option.fromUndefinedOr(entry.message);
+          if (Option.isNone(message)) continue;
+          if (message.value.role === "assistant") {
             assistantTurns += 1;
-            countTools(message.content, toolCounts);
-            for (const item of message.content) {
+            countTools(message.value.content, toolCounts);
+            for (const item of message.value.content) {
               if (item.is_error === true) errorCount += 1;
             }
             continue;
           }
-          if (message.role !== "user") continue;
-          const text = textOf(message.content);
+          if (message.value.role !== "user") continue;
+          const text = textOf(message.value.content);
           if (userPrompts.length < 3 && text.trim().length > 0) userPrompts.push(prompt(text));
         }
         if (assistantTurns === 0 && userPrompts.length === 0) continue;

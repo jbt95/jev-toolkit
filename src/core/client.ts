@@ -81,8 +81,9 @@ interface ApiQuestion {
 
 const toApiQuestion = (question: Question): ApiQuestion => {
   const converted: ApiQuestion = { type: question._tag, instructions: question.instructions };
-  if (question.criteria !== undefined && question.criteria !== null) {
-    converted.criteria = question.criteria;
+  const criteria = Option.fromNullishOr(question.criteria);
+  if (Option.isSome(criteria)) {
+    converted.criteria = criteria.value;
   }
   return converted;
 };
@@ -114,17 +115,13 @@ const toAnswer = (answer: ApiAnswer): Answer => {
         confidence: answer.confidence,
         probabilities: answer.probabilities ?? {},
       };
-    case "score": {
-      if (answer.probabilities === undefined) {
-        return { _tag: "score", score: answer.score, confidence: answer.confidence };
-      }
+    case "score":
       return {
         _tag: "score",
         score: answer.score,
         confidence: answer.confidence,
         probabilities: answer.probabilities,
       };
-    }
   }
 };
 

@@ -40,12 +40,17 @@ export const toDetectedOpportunity = (
   message: RawMessage,
   kind: ClaimKind,
 ): DetectedOpportunity => {
-  const span = matchQuantitativeClaim(message.text).find((match) => match.pattern === kind);
+  const excerpt = Option.fromUndefinedOr(
+    matchQuantitativeClaim(message.text).find((match) => match.pattern === kind),
+  ).pipe(
+    Option.map((span) => span.matched),
+    Option.getOrElse(() => message.text.slice(0, 120)),
+  );
   return {
     harness: message.harness,
     sessionID: message.sessionID,
     pattern: kind,
-    excerpt: span?.matched ?? message.text.slice(0, 120),
+    excerpt,
   };
 };
 
@@ -53,11 +58,10 @@ const messageFromText = (
   harness: RawMessage["harness"],
   sessionID: string,
   text: string,
-): RawMessage | undefined => {
+): Option.Option<RawMessage> => {
   const prose = stripFencedCode(text);
-  return prose.trim().length === 0
-    ? undefined
-    : { harness, sessionID, text: clip(redact(prose), 1000) };
+  if (prose.trim().length === 0) return Option.none();
+  return Option.some({ harness, sessionID, text: clip(redact(prose), 1000) });
 };
 
 export interface PiOmpRoot {
@@ -94,12 +98,11 @@ const decodeOpencodeContent = Schema.decodeUnknownOption(
 const decodeOpencodeText = Schema.decodeUnknownOption(Schema.fromJsonString(OpencodeTextMessage));
 
 /** Assistant rows carry `content` parts; user rows carry a top-level `text`. */
-const opencodeText = (data: string): string | undefined => {
-  const content = decodeOpencodeContent(data);
-  if (Option.isSome(content)) return textOf(content.value.content);
-  const plain = decodeOpencodeText(data);
-  return Option.isSome(plain) ? plain.value.text : undefined;
-};
+const opencodeText = (data: string): Option.Option<string> =>
+  decodeOpencodeContent(data).pipe(
+    Option.map((content) => textOf(content.content)),
+    Option.orElse(() => Option.map(decodeOpencodeText(data), (plain) => plain.text)),
+  );
 
 const OpencodeRow = Schema.Struct({ session_id: Schema.String, data: Schema.String });
 const decodeRow = Schema.decodeUnknownOption(OpencodeRow);
@@ -110,7 +113,7 @@ const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
 };
 
 const textOf = (content: ReadonlyArray<{ readonly text?: string }>): string =>
-  content.flatMap((item) => (item.text === undefined ? [] : [item.text])).join("\n");
+  content.flatMap((item) => Option.toArray(Option.fromUndefinedOr(item.text))).join("\n");
 
 export function extractOpencode(
   dbPath: string,
@@ -133,9 +136,12 @@ export function extractOpencode(
           const decodedRow = decodeRow(row);
           if (Option.isNone(decodedRow)) continue;
           const text = opencodeText(decodedRow.value.data);
-          if (text === undefined) continue;
-          const message = messageFromText("opencode2", decodedRow.value.session_id, text);
-          if (message !== undefined) messages.push(message);
+          if (Option.isNone(text)) continue;
+          messages.push(
+            ...Option.toArray(
+              messageFromText("opencode2", decodedRow.value.session_id, text.value),
+            ),
+          );
         }
         return messages;
       } finally {
@@ -162,10 +168,18 @@ export function extractClaude(
           const decoded = decodeClaudeEntry(line);
           if (Option.isNone(decoded)) continue;
           const entry = decoded.value;
-          if (entry.type !== "assistant" || entry.message === undefined) continue;
-          if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          const message = messageFromText("claude-code", sessionID, textOf(entry.message.content));
-          if (message !== undefined) messages.push(message);
+          const message = Option.fromUndefinedOr(entry.message);
+          if (entry.type !== "assistant" || Option.isNone(message)) continue;
+          const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
+            Option.map((timestamp) => timestamp < sinceIso),
+            Option.getOrElse(() => false),
+          );
+          if (tooOld) continue;
+          messages.push(
+            ...Option.toArray(
+              messageFromText("claude-code", sessionID, textOf(message.value.content)),
+            ),
+          );
         }
       }
       return messages;
@@ -196,12 +210,19 @@ export function extractPiOmp(
           const decoded = decodePiEntry(line);
           if (Option.isNone(decoded)) continue;
           const entry = decoded.value;
-          if (entry.type === "session" && entry.id !== undefined) sessionID = entry.id;
-          if (entry.type !== "message" || entry.message === undefined) continue;
-          if (entry.message.role !== "assistant") continue;
-          if (entry.timestamp !== undefined && entry.timestamp < sinceIso) continue;
-          const message = messageFromText(harness, sessionID, textOf(entry.message.content));
-          if (message !== undefined) messages.push(message);
+          const session = Option.fromUndefinedOr(entry.id);
+          if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
+          const message = Option.fromUndefinedOr(entry.message);
+          if (entry.type !== "message" || Option.isNone(message)) continue;
+          if (message.value.role !== "assistant") continue;
+          const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
+            Option.map((timestamp) => timestamp < sinceIso),
+            Option.getOrElse(() => false),
+          );
+          if (tooOld) continue;
+          messages.push(
+            ...Option.toArray(messageFromText(harness, sessionID, textOf(message.value.content))),
+          );
         }
       }
     }

@@ -55,8 +55,14 @@ export function makeEventLog(path: string): EventLogService {
       }
       return events.filter(
         (event) =>
-          (filter.harness === undefined || event.harness === filter.harness) &&
-          (filter.since === undefined || event.ts >= filter.since),
+          Option.fromUndefinedOr(filter.harness).pipe(
+            Option.map((harness) => event.harness === harness),
+            Option.getOrElse(() => true),
+          ) &&
+          Option.fromUndefinedOr(filter.since).pipe(
+            Option.map((since) => event.ts >= since),
+            Option.getOrElse(() => true),
+          ),
       );
     });
 
