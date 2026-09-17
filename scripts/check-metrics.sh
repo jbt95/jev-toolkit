@@ -7,6 +7,8 @@ for metric in \
   jev_calls_total \
   jev_tokens_total \
   jev_sessions_with_calls_total \
+  jev_labeled_sessions_with_calls_total \
+  jev_labeled_sessions_total \
   jev_opportunities_total \
   jev_compliance_ratio \
   jev_triage_total \

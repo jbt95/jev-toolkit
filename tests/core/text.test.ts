@@ -13,6 +13,25 @@ describe("text redaction and clipping", () => {
     expect(redact("export API_KEY=sk-123")).toBe("export API_KEY=[redacted]");
   });
 
+  it("masks quoted JSON authorization, lowercase names, and bare bearer tokens", () => {
+    expect(redact('{"authorization": "Bearer abc123"}')).not.toContain("abc123");
+    expect(redact("github_token=ghp_secretvalue")).toBe("github_token=[redacted]");
+    expect(redact("db_password=hunter2")).toBe("db_password=[redacted]");
+    expect(redact("curl -H 'Bearer abc123'")).not.toContain("abc123");
+  });
+
+  it("masks camelCase and bare credential keys without over-redacting prose", () => {
+    expect(redact('{"apiKey": "sk-live-123"}')).not.toContain("sk-live-123");
+    expect(redact('{"token": "abc123"}')).not.toContain("abc123");
+    expect(redact("githubToken=ghp_secretvalue")).toBe("githubToken=[redacted]");
+    expect(redact("monkey: banana")).toBe("monkey: banana");
+  });
+
+  it("masks mixed-case bearer tokens and unquoted values containing commas", () => {
+    expect(redact("curl -H 'bearer abc123def'")).not.toContain("abc123def");
+    expect(redact("password=abc,def")).toBe("password=[redacted]");
+  });
+
   it("clips long text with a marker", () => {
     const clipped = clip("x".repeat(50), 10);
     expect(clipped.startsWith("x".repeat(10))).toBe(true);

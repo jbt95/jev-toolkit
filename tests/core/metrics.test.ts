@@ -91,6 +91,11 @@ describe("metrics", () => {
     expect(body).toContain('jev_sessions_with_calls_total{harness="cli"} 2');
   });
 
+  it("counts labeled sessions that also made calls", () => {
+    expect(body).toContain('jev_labeled_sessions_total{harness="cli"} 1');
+    expect(body).toContain('jev_labeled_sessions_with_calls_total{harness="cli"} 1');
+  });
+
   it("computes compliance ratios from opportunities", () => {
     expect(body).toContain('jev_compliance_ratio{harness="cli"} 0.5');
     expect(body).toContain('jev_compliance_ratio{harness="claude-code"} 0');
@@ -123,6 +128,8 @@ describe("metrics", () => {
       "jev_calls_total",
       "jev_tokens_total",
       "jev_sessions_with_calls_total",
+      "jev_labeled_sessions_with_calls_total",
+      "jev_labeled_sessions_total",
       "jev_opportunities_total",
       "jev_compliance_ratio",
       "jev_triage_total",
@@ -135,5 +142,26 @@ describe("metrics", () => {
       expect(body).toContain(`# TYPE ${name} `);
       expect(body).toContain(`# HELP ${name} `);
     }
+  });
+
+  it("counts a re-labeled session once in the distinct labeled-session metric", () => {
+    const relabeled: ReadonlyArray<JevEvent> = [
+      ...events,
+      {
+        _tag: "session_label",
+        ts: "2026-09-17T00:08:00.000Z",
+        harness: "cli",
+        sessionID: "s1",
+        outcome: "ongoing",
+        friction: 3,
+        waste: "loop",
+        taskType: "fix",
+      },
+    ];
+
+    const relabeledBody = render(collect(relabeled));
+
+    expect(relabeledBody).toContain('jev_labeled_sessions_total{harness="cli"} 1');
+    expect(relabeledBody).toContain('jev_labeled_sessions_with_calls_total{harness="cli"} 1');
   });
 });

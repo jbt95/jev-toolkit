@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { isNotFoundError } from "./fs-errors.ts";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -61,21 +62,28 @@ export function makeLoopGuard(path: string): LoopGuardService {
     Effect.gen(function* () {
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
-        catch: () => new LoopError({ operation: "read" }),
-      }).pipe(Effect.orElseSucceed(() => "{}"));
-      const decoded = decodeState(raw);
+        catch: (cause) => cause,
+      }).pipe(
+        // A missing state file means "no history yet"; other failures must surface.
+        Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
+        Effect.mapError(() => new LoopError({ operation: "read" })),
+      );
       const state = new Map<string, LoopRecordValue>();
-      if (Option.isSome(decoded)) {
-        for (const [key, value] of Object.entries(decoded.value)) {
-          const copy: LoopRecordValue = {
-            count: value.count,
-            lastTs: value.lastTs,
-            escalated: value.escalated,
-          };
-          const sample = Option.fromUndefinedOr(value.sample);
-          if (Option.isSome(sample)) copy.sample = sample.value;
-          state.set(key, copy);
-        }
+      if (raw.trim().length === 0) return state;
+      const decoded = decodeState(raw);
+      if (Option.isNone(decoded)) {
+        // Corrupt state fails loudly instead of silently resetting the counts.
+        return yield* Effect.fail(new LoopError({ operation: "read" }));
+      }
+      for (const [key, value] of Object.entries(decoded.value)) {
+        const copy: LoopRecordValue = {
+          count: value.count,
+          lastTs: value.lastTs,
+          escalated: value.escalated,
+        };
+        const sample = Option.fromUndefinedOr(value.sample);
+        if (Option.isSome(sample)) copy.sample = sample.value;
+        state.set(key, copy);
       }
       return state;
     });

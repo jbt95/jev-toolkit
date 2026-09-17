@@ -29,6 +29,17 @@ const sampleInput: AskInput = {
   },
 };
 
+/** Run one ask against a canned response body with a fresh temp event log. */
+const askWithResponse = async (response: string, input: AskInput = sampleInput) => {
+  const log = makeEventLog(await tempEventsPath());
+  const client = makeJevClient({
+    apiKey: Option.some("test-key"),
+    transport: makeTestTransport(() => Effect.succeed(response)),
+    log,
+  });
+  return Effect.runPromise(Effect.result(client.ask(input)));
+};
+
 describe("JevClient", () => {
   it("decodes a successful response and logs an ok call event", async () => {
     const log = makeEventLog(await tempEventsPath());
@@ -105,6 +116,109 @@ describe("JevClient", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("JevDecodeError");
+  });
+
+  it("rejects a response that omits a requested answer", async () => {
+    const outcome = await askWithResponse(
+      JSON.stringify({
+        model: "jev-1.13.0",
+        answers: {},
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+    );
+
+    expect(outcome._tag).toBe("Failure");
+    if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("JevDecodeError");
+  });
+
+  it("rejects wrong primitives, out-of-range values, and extra answers", async () => {
+    const badAnswers: ReadonlyArray<object> = [
+      { is_dupe: { type: "choice", choice: "yes", confidence: 0.9, probabilities: { yes: 0.9 } } },
+      { is_dupe: { type: "noul", noul: 1.4 } },
+      { is_dupe: { type: "noul", noul: 0.9 }, extra: { type: "noul", noul: 0.5 } },
+    ];
+    for (const answers of badAnswers) {
+      const outcome = await askWithResponse(
+        JSON.stringify({
+          model: "jev-1.13.0",
+          answers,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      );
+      expect(outcome._tag).toBe("Failure");
+      if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("JevDecodeError");
+    }
+  });
+
+  it("rejects choices and scores outside their criteria", async () => {
+    const choiceInput: AskInput = {
+      harness: "cli",
+      state: "text",
+      questions: {
+        risk: { _tag: "choice", instructions: "Risk?", criteria: { low: "safe", high: "risky" } },
+      },
+    };
+    const scoreInput: AskInput = {
+      harness: "cli",
+      state: "text",
+      questions: {
+        severity: { _tag: "score", instructions: "Severity?", criteria: ["Minor", "Major"] },
+      },
+    };
+    const badCases: ReadonlyArray<readonly [AskInput, object]> = [
+      [
+        choiceInput,
+        {
+          risk: {
+            type: "choice",
+            choice: "extreme",
+            confidence: 0.9,
+            probabilities: { extreme: 0.9 },
+          },
+        },
+      ],
+      [
+        choiceInput,
+        { risk: { type: "choice", choice: "low", confidence: 1.2, probabilities: { low: 1.2 } } },
+      ],
+      [scoreInput, { severity: { type: "score", score: 5, confidence: 0.7 } }],
+    ];
+    for (const [input, answers] of badCases) {
+      const outcome = await askWithResponse(
+        JSON.stringify({
+          model: "jev-1.13.0",
+          answers,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        input,
+      );
+      expect(outcome._tag).toBe("Failure");
+      if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("JevDecodeError");
+    }
+  });
+
+  it("accepts in-range choices and scores", async () => {
+    const input: AskInput = {
+      harness: "cli",
+      state: "text",
+      questions: {
+        risk: { _tag: "choice", instructions: "Risk?", criteria: { low: "safe", high: "risky" } },
+        severity: { _tag: "score", instructions: "Severity?", criteria: ["Minor", "Major"] },
+      },
+    };
+    const outcome = await askWithResponse(
+      JSON.stringify({
+        model: "jev-1.13.0",
+        answers: {
+          risk: { type: "choice", choice: "low", confidence: 0.8, probabilities: { low: 0.8 } },
+          severity: { type: "score", score: 1, confidence: 0.6 },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+      input,
+    );
+
+    expect(outcome._tag).toBe("Success");
   });
 
   it("makeFetchTransport reads a real HTTP response from a local server", async () => {

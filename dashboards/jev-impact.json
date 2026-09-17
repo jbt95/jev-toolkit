@@ -317,7 +317,7 @@
       "id": 14,
       "type": "stat",
       "title": "Jev coverage (24h)",
-      "description": "Sessions with at least one Jev call over all labeled sessions.",
+      "description": "Labeled sessions with at least one Jev call over all labeled sessions.",
       "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
       "fieldConfig": {
@@ -346,7 +346,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(jev_sessions_with_calls_total[24h])) / sum(increase(jev_sessions_total[24h]))",
+          "expr": "sum(increase(jev_labeled_sessions_with_calls_total[24h])) / sum(increase(jev_labeled_sessions_total[24h]))",
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]

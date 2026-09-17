@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isNotFoundError } from "./fs-errors.ts";
 import { JevEvent, type Harness } from "./schema.ts";
 
 export class EventLogError extends Data.TaggedError("EventLogError")<{
@@ -45,8 +46,12 @@ export function makeEventLog(path: string): EventLogService {
     Effect.gen(function* () {
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
-        catch: () => new EventLogError({ operation: "read" }),
-      }).pipe(Effect.orElseSucceed(() => "")); // missing file = empty log
+        catch: (cause) => cause,
+      }).pipe(
+        // A missing log is an empty log; every other read failure must surface.
+        Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
+        Effect.mapError(() => new EventLogError({ operation: "read" })),
+      );
       const events: Array<JevEvent> = [];
       for (const line of raw.split("\n")) {
         if (line.trim().length === 0) continue;

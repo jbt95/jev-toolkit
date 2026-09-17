@@ -223,7 +223,12 @@ flowchart LR
 ```
 
 - `TYPESAFE_API_KEY` is read at call time; never logged, never persisted.
-- Fenced code blocks are replaced with `[code]` before any state is sent.
+- Automated flows (`audit`, `label`, `triage`, `check`, hooks) mask credentials
+  (bare or quoted Authorization/API-key fields, `*_TOKEN`/`*_KEY`/`*_SECRET`/
+  `*_PASSWORD` assignments, Bearer tokens) and replace fenced code blocks with
+  `[code]` before state is sent.
+- Direct callers (`jev ask`, MCP `typesafe_ask`) own their state; the client
+  sends it as provided and does not redact for them.
 - Triage events store counts, not text; `session_label` stores enum labels.
 - Tests are offline: fake transports, temp dirs, `127.0.0.1` only, no module
   mocking.

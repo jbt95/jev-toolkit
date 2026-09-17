@@ -11,9 +11,17 @@ export const Finding = Schema.Struct({
 });
 export type Finding = Schema.Schema.Type<typeof Finding>;
 
+const Findings = Schema.Array(Finding).pipe(
+  Schema.refine(
+    (findings): findings is ReadonlyArray<Finding> =>
+      new Set(findings.map((finding) => finding.id)).size === findings.length,
+    { message: "finding ids must be unique" },
+  ),
+);
+
 export const ReviewInput = Schema.Struct({
   meta: Schema.optional(Schema.Struct({ note: Schema.optional(Schema.String) })),
-  findings: Schema.Array(Finding),
+  findings: Findings,
 });
 export type ReviewInput = Schema.Schema.Type<typeof ReviewInput>;
 

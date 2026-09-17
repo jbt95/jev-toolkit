@@ -35,4 +35,14 @@ describe("EventLog", () => {
     const log = makeEventLog(path);
     expect(await Effect.runPromise(log.read())).toHaveLength(0);
   });
+
+  it("propagates non-ENOENT read failures", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-test-"));
+    const log = makeEventLog(dir); // a directory cannot be read as an event log
+
+    const outcome = await Effect.runPromise(Effect.result(log.read()));
+
+    expect(outcome._tag).toBe("Failure");
+    if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("EventLogError");
+  });
 });

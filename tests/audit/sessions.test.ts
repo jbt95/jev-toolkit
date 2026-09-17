@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -59,6 +59,7 @@ describe("session digests", () => {
       JSON.stringify({
         content: [
           { type: "text", text: "Working on it." },
+          { type: "thinking", name: "not-a-tool" },
           { type: "tool", name: "shell", state: { status: "error" } },
         ],
       }),
@@ -74,6 +75,24 @@ describe("session digests", () => {
     expect(digest?.userPrompts).toEqual(["fix the failing test"]);
     expect(digest?.assistantTurns).toBe(1);
     expect(digest?.toolCounts["shell"]).toBe(1);
+    expect(Object.keys(digest?.toolCounts ?? {})).toEqual(["shell"]);
+    expect(digest?.errorCount).toBe(1);
     expect(digest?.costUsd).toBe(0.25);
+  });
+
+  it("propagates non-ENOENT pi root failures and accepts a missing root", async () => {
+    const missing = await Effect.runPromise(
+      digestPiOmp([{ harness: "pi", root: join(fixturesDir, "absent") }], since),
+    );
+    expect(missing).toEqual([]);
+
+    const dir = await mkdtemp(join(tmpdir(), "jev-sessions-"));
+    const file = join(dir, "not-a-dir");
+    await writeFile(file, "x");
+
+    const outcome = await Effect.runPromise(
+      Effect.result(digestPiOmp([{ harness: "pi", root: file }], since)),
+    );
+    expect(outcome._tag).toBe("Failure");
   });
 });

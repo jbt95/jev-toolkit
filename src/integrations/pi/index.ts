@@ -22,6 +22,9 @@ interface JevRunResult {
   readonly detail: string;
 }
 
+/** Kill a hung CLI instead of blocking the harness (the API timeout is 120s). */
+const JEV_TIMEOUT_MS = 130_000;
+
 /** Run the `jev` CLI with stdin JSON; failures never throw. */
 const runJev = (
   args: ReadonlyArray<string>,
@@ -32,7 +35,11 @@ const runJev = (
     const child = execFile(
       "jev",
       [...args],
-      { maxBuffer: 1024 * 1024, env: { ...process.env, JEV_HARNESS: harness } },
+      {
+        maxBuffer: 1024 * 1024,
+        timeout: JEV_TIMEOUT_MS,
+        env: { ...process.env, JEV_HARNESS: harness },
+      },
       (error, stdout, stderr) => {
         if (error !== null) {
           const detail = stderr.trim().length > 0 ? stderr.trim() : error.message;

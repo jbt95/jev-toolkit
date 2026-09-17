@@ -1,7 +1,17 @@
 import type { SessionDigest } from "../audit/sessions.ts";
 import type { Question, QuestionMap } from "../core/schema.ts";
 
-/** Per digest: outcome, friction, waste. Batch-level: task type. */
+const TASK_TYPES = {
+  feature: "new capability",
+  fix: "bug fix",
+  review: "review or verification",
+  analysis: "investigation or measurement",
+  release: "release or integration",
+  content: "docs or content",
+  other: "other",
+} as const;
+
+/** Per digest: outcome, friction, waste, task type. */
 export function labelQuestions(digests: ReadonlyArray<SessionDigest>): QuestionMap {
   const questions: Record<string, Question> = {};
   digests.forEach((digest, index) => {
@@ -35,19 +45,11 @@ export function labelQuestions(digests: ReadonlyArray<SessionDigest>): QuestionM
         waiting_on_human: "idled waiting for the developer",
       },
     };
+    questions[`s${index}_task_type`] = {
+      _tag: "choice",
+      instructions: `What kind of work did this session cover? ${label}`,
+      criteria: TASK_TYPES,
+    };
   });
-  questions["task_type"] = {
-    _tag: "choice",
-    instructions: "What kind of work did this batch of sessions cover overall?",
-    criteria: {
-      feature: "new capability",
-      fix: "bug fix",
-      review: "review or verification",
-      analysis: "investigation or measurement",
-      release: "release or integration",
-      content: "docs or content",
-      other: "other",
-    },
-  };
   return questions;
 }

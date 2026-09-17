@@ -7,7 +7,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
-    exclude: ["node_modules", "tools"],
+    include: ["tests/**/*.test.ts", "tools/**/*.test.ts"],
+    exclude: ["node_modules"],
+    setupFiles: ["tools/oxlint/rule-tester-setup.ts"],
   },
 });

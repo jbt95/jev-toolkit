@@ -78,6 +78,7 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
   const tokens = new Map<string, { input: number; output: number }>();
   const opportunities = new Map<string, { matched: number; missed: number }>();
   const sessions = new Map<string, Set<string>>();
+  const labeledSessions = new Map<string, Set<string>>();
   const triage = new Map<string, number>();
   const latency = new Map<string, Histogram>();
   const confidence = new Map<string, Histogram>();
@@ -131,6 +132,12 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
         break;
       }
       case "session_label": {
+        const labeledSession = Option.fromUndefinedOr(event.sessionID);
+        if (Option.isSome(labeledSession)) {
+          const set = labeledSessions.get(event.harness) ?? new Set<string>();
+          set.add(labeledSession.value);
+          labeledSessions.set(event.harness, set);
+        }
         const outcomeKey = `${event.harness}|${event.outcome}`;
         sessionOutcomes.set(outcomeKey, (sessionOutcomes.get(outcomeKey) ?? 0) + 1);
         const wasteKey = `${event.harness}|${event.waste}`;
@@ -197,6 +204,27 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
       type: "counter",
       lines: sorted(sessions).map(([harness, set]) =>
         sample("jev_sessions_with_calls_total", [["harness", harness]], set.size),
+      ),
+    },
+    {
+      name: "jev_labeled_sessions_with_calls_total",
+      help: "Labeled sessions that also recorded at least one Jev call, by harness.",
+      type: "counter",
+      lines: sorted(labeledSessions).map(([harness, set]) => {
+        const called = sessions.get(harness) ?? new Set<string>();
+        return sample(
+          "jev_labeled_sessions_with_calls_total",
+          [["harness", harness]],
+          [...set].filter((sessionID) => called.has(sessionID)).length,
+        );
+      }),
+    },
+    {
+      name: "jev_labeled_sessions_total",
+      help: "Distinct labeled sessions by harness.",
+      type: "counter",
+      lines: sorted(labeledSessions).map(([harness, set]) =>
+        sample("jev_labeled_sessions_total", [["harness", harness]], set.size),
       ),
     },
     {

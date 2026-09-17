@@ -1,5 +1,5 @@
 import type { QuestionMap } from "../core/schema.ts";
-import { clip, redact } from "../core/text.ts";
+import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export interface FailureInput {
   readonly text: string;
@@ -8,7 +8,7 @@ export interface FailureInput {
 }
 
 export function failureQuestions(input: FailureInput): QuestionMap {
-  const failure = clip(redact(input.text));
+  const failure = clip(stripFencedCode(redact(input.text)));
   return {
     class: {
       _tag: "choice",

@@ -7,8 +7,9 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isNotFoundError } from "../core/fs-errors.ts";
 import { Harness } from "../core/schema.ts";
-import { clip, redact } from "../core/text.ts";
+import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export class SessionAuditError extends Data.TaggedError("SessionAuditError")<{
   readonly source: string;
@@ -32,7 +33,7 @@ export interface PiOmpRoot {
 }
 
 const isString = Predicate.isString;
-const prompt = (text: string): string => clip(redact(text)).slice(0, 300);
+const prompt = (text: string): string => clip(stripFencedCode(redact(text))).slice(0, 300);
 
 const ContentItem = Schema.Struct({
   type: Schema.String,
@@ -40,11 +41,13 @@ const ContentItem = Schema.Struct({
   name: Schema.optional(Schema.String),
   toolName: Schema.optional(Schema.String),
   is_error: Schema.optional(Schema.Boolean),
+  state: Schema.optional(Schema.Struct({ status: Schema.optional(Schema.String) })),
 });
 
 const textOf = (content: ReadonlyArray<{ readonly text?: string }>): string =>
   content.flatMap((item) => Option.toArray(Option.fromUndefinedOr(item.text))).join("\n");
 
+/** Count only actual tool-call parts: thinking, text, and image parts are not tools. */
 const countTools = (
   content: ReadonlyArray<{
     readonly type?: string;
@@ -52,13 +55,14 @@ const countTools = (
     readonly toolName?: string;
   }>,
   toolCounts: Record<string, number>,
+  toolPartType: string,
 ): void => {
   for (const item of content) {
+    if (item.type !== toolPartType) continue;
     const name = Option.firstSomeOf([
       Option.fromUndefinedOr(item.toolName),
       Option.fromUndefinedOr(item.name),
-      Option.fromUndefinedOr(item.type),
-    ]).pipe(Option.filter((candidate) => candidate !== "text"));
+    ]);
     if (Option.isNone(name)) continue;
     toolCounts[name.value] = (toolCounts[name.value] ?? 0) + 1;
   }
@@ -112,7 +116,7 @@ export function digestClaude(
           if (entry.type === "assistant") {
             assistantTurns += 1;
             if (!isString(content)) {
-              countTools(content, toolCounts);
+              countTools(content, toolCounts, "tool_use");
               for (const item of content) {
                 if (item.is_error === true) errorCount += 1;
               }
@@ -208,7 +212,10 @@ export function digestOpencode(
             const decoded = decodeOpencodeAssistant(data);
             if (Option.isNone(decoded)) continue;
             assistantTurns += 1;
-            countTools(decoded.value.content, toolCounts);
+            countTools(decoded.value.content, toolCounts, "tool");
+            for (const item of decoded.value.content) {
+              if (item.type === "tool" && item.state?.status === "error") errorCount += 1;
+            }
           }
           if (assistantTurns === 0 && userPrompts.length === 0) continue;
           const digest: SessionDigest = {
@@ -260,13 +267,21 @@ export function digestPiOmp(
     for (const { harness, root } of roots) {
       const files = yield* Effect.tryPromise({
         try: () => listJsonl(root),
-        catch: () => new SessionAuditError({ source: harness }),
-      }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        catch: (cause) => cause,
+      }).pipe(
+        // A harness that was never used has no sessions dir; other failures must surface.
+        Effect.catchIf(isNotFoundError, () => Effect.succeed([])),
+        Effect.mapError(() => new SessionAuditError({ source: harness })),
+      );
       for (const file of files) {
         const raw = yield* Effect.tryPromise({
           try: () => readFile(file, "utf8"),
-          catch: () => new SessionAuditError({ source: harness }),
-        }).pipe(Effect.orElseSucceed(() => ""));
+          catch: (cause) => cause,
+        }).pipe(
+          // A file that vanished mid-scan contributes nothing; keep other errors loud.
+          Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
+          Effect.mapError(() => new SessionAuditError({ source: harness })),
+        );
         const userPrompts: Array<string> = [];
         const toolCounts: Record<string, number> = {};
         let sessionID = basename(file, ".jsonl");
@@ -290,7 +305,7 @@ export function digestPiOmp(
           if (Option.isNone(message)) continue;
           if (message.value.role === "assistant") {
             assistantTurns += 1;
-            countTools(message.value.content, toolCounts);
+            countTools(message.value.content, toolCounts, "toolCall");
             for (const item of message.value.content) {
               if (item.is_error === true) errorCount += 1;
             }

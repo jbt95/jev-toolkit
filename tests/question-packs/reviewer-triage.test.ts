@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { AnswerMap } from "@/core/schema.ts";
-import { reviewQuestions, routeTriage, type Finding } from "@/question-packs/reviewer-triage.ts";
+import {
+  ReviewInput,
+  reviewQuestions,
+  routeTriage,
+  type Finding,
+} from "@/question-packs/reviewer-triage.ts";
 
 const findings: ReadonlyArray<Finding> = [
   {
@@ -85,5 +92,28 @@ describe("reviewer triage", () => {
 
     expect(routed.blockers.map((finding) => finding.id)).toEqual(["f2"]);
     expect(routed.cosmetic).toEqual([]);
+  });
+
+  it("rejects duplicate finding ids at the decode boundary", () => {
+    const decode = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewInput));
+    const duplicate = decode(
+      JSON.stringify({
+        findings: [
+          { id: "f1", title: "first", detail: "a" },
+          { id: "f1", title: "second", detail: "b" },
+        ],
+      }),
+    );
+    const unique = decode(
+      JSON.stringify({
+        findings: [
+          { id: "f1", title: "first", detail: "a" },
+          { id: "f2", title: "second", detail: "b" },
+        ],
+      }),
+    );
+
+    expect(Option.isNone(duplicate)).toBe(true);
+    expect(Option.isSome(unique)).toBe(true);
   });
 });

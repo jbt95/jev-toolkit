@@ -33,6 +33,8 @@ query always reflects the current log.
 | `jev_calls_total` | harness, status | Jev API calls (`ok`/`error`) |
 | `jev_tokens_total` | harness, kind | TypeSafe input/output tokens |
 | `jev_sessions_with_calls_total` | harness | sessions with at least one Jev call |
+| `jev_labeled_sessions_with_calls_total` | harness | labeled sessions that also made at least one Jev call |
+| `jev_labeled_sessions_total` | harness | distinct labeled sessions |
 | `jev_opportunities_total` | harness, matched | detected claims, matched to Jev usage or missed |
 | `jev_compliance_ratio` | harness | matched / detected claims |
 | `jev_triage_total` | feature | triage runs (`failure`/`review`/`commit`) |
@@ -49,6 +51,9 @@ Notes on semantics:
   session questions did not address them (or whose session made no Jev call).
 - **Sessions with calls** counts distinct `sessionID`s on `call` events —
   a session without a `sessionID` (some MCP clients) cannot be counted.
+- **Coverage** pairs labeled sessions with calls:
+  `jev_labeled_sessions_with_calls_total / jev_labeled_sessions_total`, both
+  distinct-session counts (re-labeling a session does not inflate the ratio).
 - **Confidence** is recorded per answer, so a single call contributes several
   observations.
 - Histograms use `le` buckets and expose `_bucket`/`_sum`/`_count` series.

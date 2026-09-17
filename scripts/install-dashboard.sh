@@ -18,17 +18,33 @@ if grep -q "jev-meter" "$stack/prometheus/prometheus.yml"; then
 else
   node -e '
     const fs = require("node:fs");
-    const path = process.argv[1];
-    const src = fs.readFileSync(path, "utf8");
-    if (!src.includes("\nrule_files:")) {
-      console.error("unexpected prometheus.yml shape: no rule_files section");
+    const file = process.argv[1];
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const start = lines.findIndex((line) => /^scrape_configs:\s*$/.test(line));
+    if (start === -1) {
+      console.error("unexpected prometheus.yml shape: no scrape_configs section");
       process.exit(1);
     }
-    const job =
-      "  - job_name: jev-meter\n" +
-      "    static_configs:\n" +
-      "      - targets: [\"host.containers.internal:8788\"]\n";
-    fs.writeFileSync(path, src.replace("\nrule_files:", "\n" + job + "\nrule_files:"));
+    let indent = "  ";
+    for (let i = start + 1; i < lines.length; i++) {
+      const match = /^(\s*)-\s/.exec(lines[i]);
+      if (match !== null) {
+        indent = match[1];
+        break;
+      }
+      if (lines[i].trim() !== "" && !/^\s/.test(lines[i])) break;
+    }
+    lines.splice(
+      start + 1,
+      0,
+      `${indent}- job_name: jev-meter`,
+      `${indent}  static_configs:`,
+      `${indent}    - targets: ["host.containers.internal:8788"]`,
+      "",
+    );
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, lines.join("\n"));
+    fs.renameSync(tmp, file);
   ' "$stack/prometheus/prometheus.yml"
   echo "scrape job added: jev-meter -> host.containers.internal:8788"
   echo "restart prometheus to apply: (cd $stack && podman-compose restart prometheus)"

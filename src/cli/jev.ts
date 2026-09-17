@@ -45,7 +45,7 @@ import {
   piSessionsDir,
 } from "../core/paths.ts";
 import { Harness, QuestionMap, type Answer } from "../core/schema.ts";
-import { clip, redact } from "../core/text.ts";
+import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
@@ -592,7 +592,7 @@ export function runCli(
             const outcomeAnswer = result.answers[`s${index}_outcome`];
             const frictionAnswer = result.answers[`s${index}_friction`];
             const wasteAnswer = result.answers[`s${index}_waste`];
-            const taskAnswer = Option.fromUndefinedOr(result.answers["task_type"]).pipe(
+            const taskAnswer = Option.fromUndefinedOr(result.answers[`s${index}_task_type`]).pipe(
               Option.filter(
                 (task): task is Extract<Answer, { readonly _tag: "choice" }> =>
                   task._tag === "choice",
@@ -642,12 +642,12 @@ export function runCli(
               catch: () => `cannot read spec file: ${specFile}`,
             }).pipe(Effect.map(Option.some)),
         });
-        const spec = Option.map(rawSpec, (raw) => clip(redact(raw), 1200));
+        const spec = Option.map(rawSpec, (raw) => clip(stripFencedCode(redact(raw)), 1200));
         // One call per message judging the four rules; with a spec, the same
         // call also answers which rules the repo's spec actually requires.
         const judge = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
           Effect.gen(function* () {
-            const message = clip(redact(rawMessage), 1500);
+            const message = clip(stripFencedCode(redact(rawMessage)), 1500);
             const base = { message };
             const state = Option.match(spec, {
               onNone: () => base,
@@ -753,7 +753,8 @@ export function runCli(
           const findings = review.findings;
           const sanitized = findings.map((finding) => ({
             ...finding,
-            detail: clip(redact(finding.detail)),
+            title: clip(redact(stripFencedCode(finding.title))),
+            detail: clip(redact(stripFencedCode(finding.detail))),
           }));
           const result = yield* client
             .ask({ harness, state: { findings: sanitized }, questions: reviewQuestions(sanitized) })
@@ -810,14 +811,20 @@ export function runCli(
             });
             return 1;
           }
-          if (candidates.length === 1) {
-            failureText = Option.fromUndefinedOr(candidates[0]).pipe(Option.getOrElse(() => ""));
+          // Transcript snippets can contain raw code or credentials; mask before sending.
+          const maskedCandidates = candidates.map((candidate) =>
+            clip(stripFencedCode(redact(candidate)), 600),
+          );
+          if (maskedCandidates.length === 1) {
+            failureText = Option.fromUndefinedOr(maskedCandidates[0]).pipe(
+              Option.getOrElse(() => ""),
+            );
           } else {
             const selection = yield* client
               .ask({
                 harness,
-                state: { candidates },
-                questions: transcriptSelectionQuestions({ candidates }),
+                state: { candidates: maskedCandidates },
+                questions: transcriptSelectionQuestions({ candidates: maskedCandidates }),
               })
               .pipe(Effect.mapError(describeJevError));
             const index = Option.fromUndefinedOr(selection.answers["failure_index"]).pipe(
@@ -852,7 +859,7 @@ export function runCli(
         }
 
         const fp = fingerprint(failureText);
-        const safeFailure = clip(redact(failureText));
+        const safeFailure = clip(stripFencedCode(redact(failureText)));
         const recent = yield* guard
           .recent(5)
           .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
@@ -889,7 +896,11 @@ export function runCli(
         const result = yield* client
           .ask({
             harness,
-            state: { source, repeats: loop.count, failure: clip(redact(failureText)) },
+            state: {
+              source,
+              repeats: loop.count,
+              failure: clip(stripFencedCode(redact(failureText))),
+            },
             questions: failureQuestions({ text: failureText, source, repeats: loop.count }),
           })
           .pipe(Effect.mapError(describeJevError));

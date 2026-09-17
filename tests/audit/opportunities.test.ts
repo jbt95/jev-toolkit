@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -95,5 +95,21 @@ describe("audit extractors", () => {
     expect(toDetectedOpportunity({ ...message, text: "prefer A over B" }, "choice").excerpt).toBe(
       "prefer A over B",
     );
+  });
+
+  it("propagates non-ENOENT pi root failures and accepts a missing root", async () => {
+    const missing = await Effect.runPromise(
+      extractPiOmp([{ harness: "omp", root: join(fixturesDir, "absent") }], since),
+    );
+    expect(missing).toEqual([]);
+
+    const dir = await mkdtemp(join(tmpdir(), "jev-audit-"));
+    const file = join(dir, "not-a-dir");
+    await writeFile(file, "x");
+
+    const outcome = await Effect.runPromise(
+      Effect.result(extractPiOmp([{ harness: "omp", root: file }], since)),
+    );
+    expect(outcome._tag).toBe("Failure");
   });
 });

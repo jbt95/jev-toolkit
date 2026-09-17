@@ -136,9 +136,12 @@ module mocking.
 
 ## Privacy
 
-Only sanitized state leaves the machine: summaries, counts, and masked values,
-with fenced code blocks stripped before anything is sent. `TYPESAFE_API_KEY`
-is read at call time and never logged. Raw code, diffs, transcripts, secrets,
-and credentials never go into Jev state or the event log; the log is
-local-only. Details in
+Automated flows (`audit`, `label`, `triage`, `check`, hooks) sanitize before
+anything leaves the machine: credentials are masked, fenced code blocks become
+`[code]`, and long text is clipped with a marker. `TYPESAFE_API_KEY` is read at
+call time and never logged. Raw code, diffs, transcripts, secrets, and
+credentials never go into the event log; the log is local-only.
+
+`jev ask` and the MCP `typesafe_ask` tool accept caller-provided state and send
+it as provided — callers are responsible for redaction there. Details in
 [architecture.md](docs/architecture.md#privacy-boundary).

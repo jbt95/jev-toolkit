@@ -126,6 +126,41 @@ const toAnswer = (answer: ApiAnswer): Answer => {
   }
 };
 
+const inUnitInterval = (value: number): boolean => value >= 0 && value <= 1;
+
+const probabilitiesInRange = (probabilities: Readonly<Record<string, number>>): boolean =>
+  Object.values(probabilities).every(inUnitInterval);
+
+/**
+ * Schema validation only proves shape; a response is trustworthy only when
+ * every requested question is answered with its own primitive, a choice from
+ * its criteria, and bounded numbers. Anything else must fail closed.
+ */
+const answerMatchesQuestion = (question: Question, answer: Answer): boolean => {
+  switch (question._tag) {
+    case "noul":
+      return answer._tag === "noul" && inUnitInterval(answer.noul);
+    case "choice":
+      return (
+        answer._tag === "choice" &&
+        inUnitInterval(answer.confidence) &&
+        Object.hasOwn(question.criteria, answer.choice) &&
+        probabilitiesInRange(answer.probabilities)
+      );
+    case "score": {
+      const maxScore = question.criteria.length - 1;
+      return (
+        answer._tag === "score" &&
+        inUnitInterval(answer.confidence) &&
+        Number.isFinite(answer.score) &&
+        answer.score >= 0 &&
+        (maxScore < 0 || answer.score <= maxScore) &&
+        (answer.probabilities === undefined || probabilitiesInRange(answer.probabilities))
+      );
+    }
+  }
+};
+
 const JevResponse = Schema.Struct({
   model: Schema.String,
   answers: Schema.Record(Schema.String, ApiAnswer),
@@ -249,6 +284,24 @@ export function makeJevClient(
       const answers: AnswerMap = Object.fromEntries(
         Object.entries(decoded.success.answers).map(([id, answer]) => [id, toAnswer(answer)]),
       );
+      const requested = Object.entries(input.questions);
+      const answered = Object.keys(decoded.success.answers);
+      const consistent =
+        answered.length === requested.length &&
+        requested.every(([id, question]) =>
+          Option.fromUndefinedOr(answers[id]).pipe(
+            Option.exists((answer) => answerMatchesQuestion(question, answer)),
+          ),
+        );
+      if (!consistent) {
+        yield* logCall(input, {
+          status: "error",
+          latencyMs,
+          model,
+          error: "TypeSafe response did not answer the requested questions",
+        });
+        return yield* Effect.fail(new JevDecodeError());
+      }
       const result: AskResult = {
         model: decoded.success.model,
         answers,

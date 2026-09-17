@@ -16,12 +16,15 @@ import { execFile } from "node:child_process";
 import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../core/directives.ts";
 import { matchQuantitativeClaim } from "../../core/detector.ts";
 
+/** Kill a hung triage process instead of accumulating stuck children (API timeout is 120s). */
+const JEV_TIMEOUT_MS = 130_000;
+
 /** Best-effort failure triage via the CLI; never blocks or throws. */
 const triageFailure = (text: string): void => {
   const child = execFile(
     "jev",
     ["triage", "failure"],
-    { env: { ...process.env, JEV_HARNESS: "opencode2" } },
+    { env: { ...process.env, JEV_HARNESS: "opencode2" }, timeout: JEV_TIMEOUT_MS },
     () => {},
   );
   child.stdin?.end(text.slice(0, 4000));

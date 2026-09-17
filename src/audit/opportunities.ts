@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { matchQuantitativeClaim } from "../core/detector.ts";
+import { isNotFoundError } from "../core/fs-errors.ts";
 import { Harness, type ClaimKind } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 
@@ -197,13 +198,21 @@ export function extractPiOmp(
     for (const { harness, root } of roots) {
       const files = yield* Effect.tryPromise({
         try: () => listJsonl(root),
-        catch: () => new AuditError({ source: harness }),
-      }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        catch: (cause) => cause,
+      }).pipe(
+        // A harness that was never used has no sessions dir; other failures must surface.
+        Effect.catchIf(isNotFoundError, () => Effect.succeed([])),
+        Effect.mapError(() => new AuditError({ source: harness })),
+      );
       for (const file of files) {
         const raw = yield* Effect.tryPromise({
           try: () => readFile(file, "utf8"),
-          catch: () => new AuditError({ source: harness }),
-        }).pipe(Effect.orElseSucceed(() => ""));
+          catch: (cause) => cause,
+        }).pipe(
+          // A file that vanished mid-scan contributes nothing; keep other errors loud.
+          Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
+          Effect.mapError(() => new AuditError({ source: harness })),
+        );
         let sessionID = basename(file, ".jsonl");
         for (const line of raw.split("\n")) {
           if (line.trim().length === 0) continue;

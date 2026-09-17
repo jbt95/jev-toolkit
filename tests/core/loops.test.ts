@@ -23,7 +23,7 @@ describe("loop guard", () => {
     expect(fourth).toEqual({ count: 4, escalated: false });
   });
 
-  it("prunes stale entries and tolerates a missing or malformed state file", async () => {
+  it("prunes stale entries and tolerates a missing state file", async () => {
     const path = await tempStatePath();
     const stale = { count: 9, lastTs: Date.now() - 48 * 60 * 60 * 1000, escalated: true };
     await writeFile(path, JSON.stringify({ "old-fp": stale }));
@@ -36,12 +36,31 @@ describe("loop guard", () => {
     expect(raw).not.toContain("old-fp");
     expect(raw).toContain("new-fp");
 
-    const malformed = makeLoopGuard(path);
-    await writeFile(path, "not json");
-    await expect(Effect.runPromise(malformed.check("fp"))).resolves.toEqual({
+    const missing = makeLoopGuard(await tempStatePath());
+    await expect(Effect.runPromise(missing.check("fp"))).resolves.toEqual({
       count: 1,
       escalated: false,
     });
+  });
+
+  it("fails loudly on a malformed state file", async () => {
+    const path = await tempStatePath();
+    await writeFile(path, "not json");
+    const malformed = makeLoopGuard(path);
+
+    const outcome = await Effect.runPromise(Effect.result(malformed.check("fp")));
+
+    expect(outcome._tag).toBe("Failure");
+    if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("LoopError");
+  });
+
+  it("fails on non-ENOENT read failures", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-loop-"));
+    const guard = makeLoopGuard(dir); // a directory cannot be read as a state file
+
+    const outcome = await Effect.runPromise(Effect.result(guard.recent(1)));
+
+    expect(outcome._tag).toBe("Failure");
   });
 
   it("fingerprints ignore case and whitespace", () => {
