@@ -117,7 +117,7 @@ export function makeLoopGuard(path: string): LoopGuardService {
       const state = yield* readState();
       return [...state.entries()]
         .filter(([, record]) => record.sample !== undefined)
-        .sort(([, a], [, b]) => b.lastTs - a.lastTs)
+        .sort(([fa, a], [fb, b]) => b.lastTs - a.lastTs || fa.localeCompare(fb))
         .slice(0, limit)
         .map(([fp, record]) => ({ fingerprint: fp, sample: record.sample ?? "" }));
     });
