@@ -310,7 +310,7 @@ export function runCli(
           })
           .pipe(Effect.mapError(describeJevError));
         yield* Effect.sync(() => {
-          console.log(formatAnswers(result));
+          console.log(formatAnswers(result, payload.questions));
         });
         return 0;
       }

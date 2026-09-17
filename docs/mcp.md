@@ -87,10 +87,15 @@ noul   → { "_tag": "noul", "noul": 0.31 }
 score  → { "_tag": "score", "score": 2, "confidence": 0.7, "probabilities": {…} }
 ```
 
-Text results are formatted as one line per answer
-(`id: p(yes)=…`, `id: value (confidence N)`), prefixed with the model and
-suffixed with token usage — enough for an agent to read directly, and echoed
-by `jev ask`.
+Text results are one line per answer with plain verdict words, prefixed with
+the model and suffixed with token usage — enough for an agent to read
+directly, and echoed by `jev ask`. Noul lines read
+`id: p(yes)=0.73 — likely yes` (bands: very likely yes / likely yes /
+toss-up / likely no / very likely no). Score lines resolve the weighted index
+against the question's ordered levels when known
+(`id: 0.42 → between misleading and thin, leans misleading (confidence 0.58)`).
+Choice and score lines append `— LOW, treat as no signal` when confidence is
+below 0.4.
 
 ## typesafe_verify
 

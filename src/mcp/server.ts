@@ -245,7 +245,7 @@ const appendEvent = (
 const runAsk = async (config: McpConfig, input: AskInput): Promise<McpToolOutcome> => {
   const outcome = await Effect.runPromise(Effect.result(config.ask(input)));
   if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
-  return { ok: true, text: formatAnswers(outcome.success) };
+  return { ok: true, text: formatAnswers(outcome.success, input.questions) };
 };
 
 const askTool = (config: McpConfig): McpTool => ({

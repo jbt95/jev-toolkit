@@ -197,7 +197,7 @@ describe("MCP server", () => {
 
     expect(success).toEqual({
       ok: true,
-      text: "jev jev-1.13.0\nq1: p(yes)=0.99\nusage: 10 in / 2 out",
+      text: "jev jev-1.13.0\nq1: p(yes)=0.99 — very likely yes\nusage: 10 in / 2 out",
     });
     expect(failure).toEqual({ ok: false, text: "JevConfigError" });
   });

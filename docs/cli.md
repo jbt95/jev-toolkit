@@ -52,7 +52,7 @@ $ echo '{"state":{"text":"Ship the parser refactor today?"},"questions":{
   "ship":{"_tag":"noul","instructions":"Should this ship today?"},
   "risk":{"_tag":"choice","instructions":"Risk level?","criteria":{"low":"safe","high":"risky"}}}}' | jev ask
 jev jev-latest
-ship: p(yes)=0.31
+ship: p(yes)=0.31 — likely no
 risk: low (confidence 0.62)
 usage: 118 in / 19 out
 ```

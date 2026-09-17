@@ -3,7 +3,6 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { EventLog, type EventLogService } from "./events.ts";
@@ -340,16 +339,56 @@ export const JevClientLive = (config: JevClientConfig): Layer.Layer<JevClient, n
     }),
   );
 
-const formatAnswer = Match.type<Answer>().pipe(
-  Match.tag("noul", (answer) => `p(yes)=${answer.noul}`),
-  Match.tag("choice", (answer) => `${answer.choice} (confidence ${answer.confidence})`),
-  Match.tag("score", (answer) => `${answer.score} (confidence ${answer.confidence})`),
-  Match.exhaustive,
-);
+/** Plain words for a yes-probability, so `0.73` reads as a verdict. */
+const noulVerdict = (p: number): string => {
+  if (p >= 0.8) return "very likely yes";
+  if (p >= 0.6) return "likely yes";
+  if (p > 0.4) return "toss-up";
+  if (p > 0.2) return "likely no";
+  return "very likely no";
+};
 
-export function formatAnswers(result: AskResult): string {
+/** Low-confidence flag: below ~0.4 the model found no clear signal. */
+const lowFlag = (confidence: number): string =>
+  confidence < 0.4 ? " — LOW, treat as no signal" : "";
+
+/** Score levels are often `"label — description"`; keep the line to the label. */
+const shortLevel = (level: string): string => level.split(/\s+[—–-]\s+|\s*:\s*/u)[0] ?? level;
+
+/** Weighted score index rendered against its ordered levels, when known. */
+const scoreVerdict = (score: number, levels: ReadonlyArray<string>): string => {
+  const labels = levels.map(shortLevel);
+  const max = labels.length - 1;
+  const clamped = Math.min(Math.max(score, 0), max);
+  const lo = Math.floor(clamped);
+  const hi = Math.ceil(clamped);
+  const near = labels[lo] ?? String(lo);
+  if (lo === hi) return near;
+  const far = labels[hi] ?? String(hi);
+  return `between ${near} and ${far}, leans ${clamped - lo < 0.5 ? near : far}`;
+};
+
+const formatAnswer = (id: string, answer: Answer, questions?: QuestionMap): string => {
+  switch (answer._tag) {
+    case "noul":
+      return `p(yes)=${answer.noul} — ${noulVerdict(answer.noul)}`;
+    case "choice":
+      return `${answer.choice} (confidence ${answer.confidence}${lowFlag(answer.confidence)})`;
+    case "score": {
+      const question = questions?.[id];
+      const levels =
+        question !== undefined && question._tag === "score" ? question.criteria : undefined;
+      const base = `${answer.score} (confidence ${answer.confidence}${lowFlag(answer.confidence)})`;
+      return levels === undefined || levels.length === 0
+        ? base
+        : `${answer.score} → ${scoreVerdict(answer.score, levels)} (confidence ${answer.confidence}${lowFlag(answer.confidence)})`;
+    }
+  }
+};
+
+export function formatAnswers(result: AskResult, questions?: QuestionMap): string {
   const lines = Object.entries(result.answers).map(
-    ([id, answer]) => `${id}: ${formatAnswer(answer)}`,
+    ([id, answer]) => `${id}: ${formatAnswer(id, answer, questions)}`,
   );
   return [
     `jev ${result.model}`,
