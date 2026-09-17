@@ -64,6 +64,14 @@ const events: ReadonlyArray<JevEvent> = [
     matched: false,
   },
   {
+    _tag: "opportunity",
+    ts: "2026-09-17T00:05:30.000Z",
+    harness: "cli",
+    source: "user_prompt",
+    pattern: "choice",
+    matched: true,
+  },
+  {
     _tag: "triage",
     ts: "2026-09-17T00:06:00.000Z",
     harness: "cli",
@@ -97,8 +105,11 @@ describe("metrics", () => {
   });
 
   it("computes compliance ratios from opportunities", () => {
-    expect(body).toContain('jev_compliance_ratio{harness="cli"} 0.5');
-    expect(body).toContain('jev_compliance_ratio{harness="claude-code"} 0');
+    expect(body).toContain('jev_compliance_ratio{harness="cli",source="assistant_message"} 0.5');
+    expect(body).toContain('jev_compliance_ratio{harness="cli",source="user_prompt"} 1');
+    expect(body).toContain(
+      'jev_compliance_ratio{harness="claude-code",source="assistant_message"} 0',
+    );
   });
 
   it("sums tokens and counts triage runs", () => {

@@ -108,6 +108,12 @@ export interface OpencodeDb {
     text: string,
     sessionID?: string,
   ) => void;
+  readonly insertAsk: (
+    id: string,
+    sessionID: string,
+    timeCreated: number,
+    questionIDs: ReadonlyArray<string>,
+  ) => void;
   readonly insertSession: (id: string, title: string, timeCreated: number) => void;
 }
 
@@ -118,7 +124,7 @@ export const makeOpencodeDb = async (): Promise<OpencodeDb> => {
   db.exec(`
     CREATE TABLE session_v2 (id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER, cost REAL);
     CREATE TABLE session_message (
-      id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT
+      id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT
     );
   `);
   db.close();
@@ -137,9 +143,31 @@ export const makeOpencodeDb = async (): Promise<OpencodeDb> => {
         const payload = type === "user" ? { text } : { content: [{ type: "text", text }] };
         handle
           .prepare(
-            "INSERT INTO session_message (id, session_id, type, seq, time_created, data) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
           )
-          .run(id, sessionID, type, Date.now(), timeCreated, JSON.stringify(payload));
+          .run(id, sessionID, type, Date.now(), timeCreated, timeCreated, JSON.stringify(payload));
+      }),
+    insertAsk: (id, sessionID, timeCreated, questionIDs) =>
+      withDb((handle) => {
+        const code = `return tools.jev.typesafe_ask({ questions: { ${questionIDs
+          .map((questionID) => `${questionID}: {}`)
+          .join(", ")} } });`;
+        const payload = {
+          content: [{ type: "tool", name: "execute", state: { input: { code } } }],
+        };
+        handle
+          .prepare(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            id,
+            sessionID,
+            "assistant",
+            Date.now(),
+            timeCreated,
+            timeCreated,
+            JSON.stringify(payload),
+          );
       }),
     insertSession: (id, title, timeCreated) =>
       withDb((handle) => {

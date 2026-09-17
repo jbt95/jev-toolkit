@@ -13,10 +13,15 @@ import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export class AuditError extends Data.TaggedError("AuditError")<{ readonly source: string }> {}
 
+/** Which surface a raw message came from: a request or a published claim. */
+export const MessageSource = Schema.Literals(["user_prompt", "assistant_message"]);
+export type MessageSource = Schema.Schema.Type<typeof MessageSource>;
+
 /** One assistant message (or user prompt) reduced to the prose Jev may see. */
 export const RawMessage = Schema.Struct({
   harness: Harness,
   sessionID: Schema.String,
+  source: MessageSource,
   text: Schema.String,
 });
 export type RawMessage = Schema.Schema.Type<typeof RawMessage>;
@@ -24,6 +29,7 @@ export type RawMessage = Schema.Schema.Type<typeof RawMessage>;
 export interface DetectedOpportunity {
   readonly harness: RawMessage["harness"];
   readonly sessionID: string;
+  readonly source: MessageSource;
   readonly pattern: ClaimKind;
   readonly excerpt: string;
   /** Sanitized window around the claim; the alignment prompt needs context. */
@@ -62,6 +68,7 @@ export const toDetectedOpportunity = (
   return {
     harness: message.harness,
     sessionID: message.sessionID,
+    source: message.source,
     pattern: kind,
     excerpt,
     context: windowAround(
@@ -74,11 +81,12 @@ export const toDetectedOpportunity = (
 const messageFromText = (
   harness: RawMessage["harness"],
   sessionID: string,
+  source: MessageSource,
   text: string,
 ): Option.Option<RawMessage> => {
   const prose = stripFencedCode(text);
   if (prose.trim().length === 0) return Option.none();
-  return Option.some({ harness, sessionID, text: clip(redact(prose), 1000) });
+  return Option.some({ harness, sessionID, source, text: clip(redact(prose), 1000) });
 };
 
 export interface PiOmpRoot {
@@ -149,6 +157,7 @@ export function extractOpencode(
           )
           .all(messageType, sinceMs);
         const messages: Array<RawMessage> = [];
+        const source: MessageSource = messageType === "user" ? "user_prompt" : "assistant_message";
         for (const row of rows) {
           const decodedRow = decodeRow(row);
           if (Option.isNone(decodedRow)) continue;
@@ -156,7 +165,7 @@ export function extractOpencode(
           if (Option.isNone(text)) continue;
           messages.push(
             ...Option.toArray(
-              messageFromText("opencode2", decodedRow.value.session_id, text.value),
+              messageFromText("opencode2", decodedRow.value.session_id, source, text.value),
             ),
           );
         }
@@ -194,7 +203,12 @@ export function extractClaude(
           if (tooOld) continue;
           messages.push(
             ...Option.toArray(
-              messageFromText("claude-code", sessionID, textOf(message.value.content)),
+              messageFromText(
+                "claude-code",
+                sessionID,
+                "assistant_message",
+                textOf(message.value.content),
+              ),
             ),
           );
         }
@@ -246,7 +260,14 @@ export function extractPiOmp(
           );
           if (tooOld) continue;
           messages.push(
-            ...Option.toArray(messageFromText(harness, sessionID, textOf(message.value.content))),
+            ...Option.toArray(
+              messageFromText(
+                harness,
+                sessionID,
+                "assistant_message",
+                textOf(message.value.content),
+              ),
+            ),
           );
         }
       }

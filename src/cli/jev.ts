@@ -17,6 +17,7 @@ import {
   type DetectedOpportunity,
   type RawMessage,
 } from "../audit/opportunities.ts";
+import { attributeCalls, loadOpencodeTurns } from "../audit/attribution.ts";
 import {
   digestClaude,
   digestOpencode,
@@ -446,8 +447,14 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
 
     const messages: Array<RawMessage> = [];
     if (wants("opencode2")) {
+      // Both surfaces: user turns are the demand signal, assistant turns the
+      // published claims. Each keeps its source so compliance can be split.
+      const dbPath = opencodeDbPath();
       messages.push(
-        ...(yield* extractOpencode(opencodeDbPath(), sinceIso, "assistant").pipe(
+        ...(yield* extractOpencode(dbPath, sinceIso, "user").pipe(
+          Effect.mapError((error) => `audit failed: ${error.source}`),
+        )),
+        ...(yield* extractOpencode(dbPath, sinceIso, "assistant").pipe(
           Effect.mapError((error) => `audit failed: ${error.source}`),
         )),
       );
@@ -497,18 +504,45 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     const events = yield* log
       .read()
       .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    // Calls that did not carry a session id are recovered from the transcript:
+    // the MCP transport cannot pass one, so matching the call's question ids
+    // against the assistant turn that contains them restores the link offline.
+    const opencodeCalls = events.flatMap((event) =>
+      event._tag === "call" && event.harness === "opencode2" && event.sessionID === undefined
+        ? [event]
+        : [],
+    );
+    const turns = wants("opencode2")
+      ? yield* loadOpencodeTurns(opencodeDbPath(), sinceIso).pipe(
+          Effect.mapError((error) => `audit failed: ${error.source}`),
+        )
+      : [];
+    const inferredSessions = new Map<number, string>();
+    attributeCalls(
+      turns,
+      opencodeCalls.map((event) => ({
+        questionIDs: event.questions.map((question) => question.id),
+        atMs: Date.parse(event.ts),
+      })),
+    ).forEach((sessionID, index) => {
+      if (Option.isSome(sessionID)) inferredSessions.set(index, sessionID.value);
+    });
     const sessionQuestions = new Map<string, Array<string>>();
+    let unattributed = 0;
     for (const event of events) {
-      if (event._tag === "call") {
-        const sessionID = Option.fromUndefinedOr(event.sessionID);
-        if (Option.isNone(sessionID)) continue;
-        const key = `${event.harness}|${sessionID.value}`;
-        const list = sessionQuestions.get(key) ?? [];
-        for (const question of event.questions) {
-          if (!list.includes(question.id)) list.push(question.id);
-        }
-        sessionQuestions.set(key, list);
+      if (event._tag !== "call") continue;
+      let sessionID = Option.fromUndefinedOr(event.sessionID);
+      if (Option.isNone(sessionID) && event.harness === "opencode2") {
+        sessionID = Option.fromUndefinedOr(inferredSessions.get(unattributed));
+        unattributed += 1;
       }
+      if (Option.isNone(sessionID)) continue;
+      const key = `${event.harness}|${sessionID.value}`;
+      const list = sessionQuestions.get(key) ?? [];
+      for (const question of event.questions) {
+        if (!list.includes(question.id)) list.push(question.id);
+      }
+      sessionQuestions.set(key, list);
     }
     const bySession = new Map<string, Array<DetectedOpportunity>>();
     for (const item of detected) {
@@ -559,7 +593,7 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
             ts: new Date(now).toISOString(),
             harness: opportunity.harness,
             sessionID: opportunity.sessionID,
-            source: "assistant_message",
+            source: opportunity.source,
             pattern: opportunity.pattern,
             matched: opportunity.matched,
           })

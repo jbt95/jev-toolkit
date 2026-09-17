@@ -74,6 +74,49 @@ describe("jev audit", () => {
     expect(opportunities[0]?.matched).toBe(true);
   });
 
+  it("infers an unattributed call's session from the transcript and audits user prompts", async () => {
+    const db = await makeOpencodeDb();
+    db.insertMessage(
+      "u1",
+      "user",
+      Date.now() - 1000,
+      "Assess how we can achieve that",
+      "sess-infer",
+    );
+    db.insertAsk("a1", "sess-infer", Date.now() - 900, ["recommendation", "causal_claim"]);
+    process.env.JEV_OPENCODE_DB = db.path;
+    const path = await tempEventsPath();
+    await Effect.runPromise(
+      makeEventLog(path).append({
+        _tag: "call",
+        ts: new Date().toISOString(),
+        harness: "opencode2",
+        // No sessionID: the MCP transport cannot carry one.
+        model: "jev-test",
+        latencyMs: 5,
+        status: "ok",
+        questions: [
+          { id: "recommendation", type: "choice" },
+          { id: "causal_claim", type: "choice" },
+        ],
+      }),
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await Effect.runPromise(
+      runCli(["audit", "run", "--harness", "opencode2"], cliLayers(path, respond)),
+    );
+
+    expect(code).toBe(0);
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("100.0%");
+    const events = await Effect.runPromise(makeEventLog(path).read());
+    const opportunities = events.filter((event) => event._tag === "opportunity");
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0]?.source).toBe("user_prompt");
+    expect(opportunities[0]?.matched).toBe(true);
+  });
+
   it("stays unmatched and writes nothing on a dry run without attributed calls", async () => {
     const db = await makeOpencodeDb();
     db.insertMessage("m1", "assistant", Date.now() - 1000, "About 70% of parsers break here.");

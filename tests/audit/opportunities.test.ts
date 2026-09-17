@@ -90,7 +90,12 @@ describe("audit extractors", () => {
   });
 
   it("quotes the prefilter span and carries a context window for alignment", () => {
-    const message: RawMessage = { harness: "cli", sessionID: "s", text: "About 70% done." };
+    const message: RawMessage = {
+      harness: "cli",
+      sessionID: "s",
+      source: "assistant_message",
+      text: "About 70% done.",
+    };
     const percent = toDetectedOpportunity(message, "percent");
     expect(percent.excerpt).toBe("70%");
     expect(percent.context).toBe("About 70% done.");

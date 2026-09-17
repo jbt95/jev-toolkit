@@ -10,6 +10,15 @@ describe("matchQuantitativeClaim", () => {
     expect(matchQuantitativeClaim("Should we ship this?")[0]?.pattern).toBe("choice");
   });
 
+  it("matches recommendation, assessment, and option-comparison language", () => {
+    expect(matchQuantitativeClaim("Assess how we can achieve that")[0]?.pattern).toBe("choice");
+    expect(matchQuantitativeClaim("recommend an architecture")[0]?.pattern).toBe("choice");
+    expect(matchQuantitativeClaim("compare OTLP vs textfile")[0]?.pattern).toBe("choice");
+    expect(matchQuantitativeClaim("I would like to measure the impact")[0]?.pattern).toBe(
+      "estimate",
+    );
+  });
+
   it("ignores neutral prose", () => {
     expect(matchQuantitativeClaim("The build finished and the tests pass.")).toHaveLength(0);
   });

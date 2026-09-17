@@ -73,6 +73,12 @@ const histogramLines = (
 const sorted = <T>(map: ReadonlyMap<string, T>): ReadonlyArray<readonly [string, T]> =>
   [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+/** Composite metric keys are `primary|secondary`; split them back into labels. */
+const splitKey = (key: string): readonly [string, string] => {
+  const separator = key.indexOf("|");
+  return separator < 0 ? [key, ""] : [key.slice(0, separator), key.slice(separator + 1)];
+};
+
 export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
   const calls = new Map<string, { ok: number; error: number }>();
   const tokens = new Map<string, { input: number; output: number }>();
@@ -123,10 +129,11 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
         break;
       }
       case "opportunity": {
-        const entry = opportunities.get(event.harness) ?? { matched: 0, missed: 0 };
+        const key = `${event.harness}|${event.source}`;
+        const entry = opportunities.get(key) ?? { matched: 0, missed: 0 };
         if (event.matched) entry.matched += 1;
         else entry.missed += 1;
-        opportunities.set(event.harness, entry);
+        opportunities.set(key, entry);
         break;
       }
       case "triage": {
@@ -241,34 +248,43 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
       name: "jev_opportunities_total",
       help: "Detected quantitative claims, matched to Jev usage or missed.",
       type: "counter",
-      lines: sorted(opportunities).flatMap(([harness, counts]) => [
-        sample(
-          "jev_opportunities_total",
-          [
-            ["harness", harness],
-            ["matched", "true"],
-          ],
-          counts.matched,
-        ),
-        sample(
-          "jev_opportunities_total",
-          [
-            ["harness", harness],
-            ["matched", "false"],
-          ],
-          counts.missed,
-        ),
-      ]),
+      lines: sorted(opportunities).flatMap(([key, counts]) => {
+        const [harness, source] = splitKey(key);
+        return [
+          sample(
+            "jev_opportunities_total",
+            [
+              ["harness", harness],
+              ["source", source],
+              ["matched", "true"],
+            ],
+            counts.matched,
+          ),
+          sample(
+            "jev_opportunities_total",
+            [
+              ["harness", harness],
+              ["source", source],
+              ["matched", "false"],
+            ],
+            counts.missed,
+          ),
+        ];
+      }),
     },
     {
       name: "jev_compliance_ratio",
-      help: "Fraction of detected claims that went through Jev, by harness.",
+      help: "Fraction of detected claims that went through Jev, by harness and source.",
       type: "gauge",
-      lines: sorted(opportunities).map(([harness, counts]) => {
+      lines: sorted(opportunities).map(([key, counts]) => {
+        const [harness, source] = splitKey(key);
         const total = counts.matched + counts.missed;
         return sample(
           "jev_compliance_ratio",
-          [["harness", harness]],
+          [
+            ["harness", harness],
+            ["source", source],
+          ],
           total === 0 ? 0 : round(counts.matched / total),
         );
       }),
