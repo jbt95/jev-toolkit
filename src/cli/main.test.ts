@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { runCli } from "../cli/jev.ts";
+import { join } from "node:path";
+import { runCli, type CliServices } from "../cli/jev.ts";
 import { JevClient, makeJevClient } from "../core/client.ts";
-import { EventLog, EventLogLive, makeEventLog } from "../core/events.ts";
+import { EventLogLive, makeEventLog } from "../core/events.ts";
+import { LoopGuardLive } from "../core/loops.ts";
 import { makeTestTransport, tempEventsPath } from "../../tests/helpers.ts";
 
 const cannedSuccess = JSON.stringify({
@@ -13,9 +15,25 @@ const cannedSuccess = JSON.stringify({
   usage: { input_tokens: 100, output_tokens: 10 },
 });
 
-const layersFor = (path: string, response = cannedSuccess): Layer.Layer<JevClient | EventLog> =>
+const failureResponse = JSON.stringify({
+  model: "jev-1.13.0",
+  answers: {
+    class: {
+      type: "choice",
+      choice: "env_or_config",
+      confidence: 0.9,
+      probabilities: { env_or_config: 0.9 },
+    },
+    blocks_work: { type: "noul", noul: 0.8 },
+    safe_to_suppress: { type: "noul", noul: 0.7 },
+  },
+  usage: { input_tokens: 120, output_tokens: 25 },
+});
+
+const layersFor = (path: string, response = cannedSuccess): Layer.Layer<CliServices> =>
   Layer.mergeAll(
     EventLogLive(path),
+    LoopGuardLive(join(path, "..", "loop-state.json")),
     Layer.succeed(
       JevClient,
       makeJevClient({
@@ -113,6 +131,35 @@ describe("jev CLI", () => {
     expect(code1).toBe(0);
     expect(code2).toBe(0);
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("classifies failures and escalates only on repeated ones", async () => {
+    const path = await tempEventsPath();
+    const layers = layersFor(path, failureResponse);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const input = "make: cc: No such file or directory";
+
+    const code1 = await Effect.runPromise(
+      runCli(["triage", "failure"], layers, () => Effect.succeed(input)),
+    );
+    expect(code1).toBe(0);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain("failure class: env_or_config");
+
+    await Effect.runPromise(runCli(["triage", "failure"], layers, () => Effect.succeed(input)));
+    await Effect.runPromise(runCli(["triage", "failure"], layers, () => Effect.succeed(input)));
+
+    const allOutput = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(allOutput).toContain("ESCALATE:");
+    expect(allOutput).toContain("blocks_work: p(yes)=0.8");
+
+    const events = await Effect.runPromise(makeEventLog(path).read());
+    const triageEvents = events.filter((event) => event._tag === "triage");
+    expect(triageEvents).toHaveLength(3);
+    const last = triageEvents[2];
+    if (last?._tag === "triage") {
+      expect(last.summary.escalate).toBe(1);
+      expect(last.summary.repeats).toBe(3);
+    }
   });
 
   it("fails with exit code 1 on an invalid ask payload", async () => {

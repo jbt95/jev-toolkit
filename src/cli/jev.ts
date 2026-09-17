@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
   correlate,
@@ -23,17 +24,20 @@ import {
 import { matchQuantitativeClaim } from "../core/detector.ts";
 import { PROMPT_DIRECTIVE } from "../core/directives.ts";
 import { EventLog, EventLogLive } from "../core/events.ts";
+import { LoopGuard, LoopGuardLive, fingerprint } from "../core/loops.ts";
 import { serveMeter } from "../core/metrics.ts";
 import {
   apiEndpoint,
   claudeProjectsDir,
   eventsPath,
+  loopStatePath,
   ompSessionsDir,
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
 import { Harness, QuestionMap } from "../core/schema.ts";
 import { createMcpDeps, serveMcp } from "../mcp/server.ts";
+import { clip, failureQuestions, redact } from "../question-packs/failure-triage.ts";
 
 const AskPayload = Schema.Struct({
   state: Schema.Json,
@@ -56,6 +60,7 @@ commands:
   events   print recent events as JSON lines ([--n N] [--harness <id>])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     Claude Code hooks: jev hook prompt
+  triage   classify failures and break loops: jev triage failure [--transcript FILE]
   mcp      stdio MCP server exposing typesafe_ask (single tool surface)
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
@@ -108,14 +113,35 @@ const printAuditSummary = (
   }
 };
 
+const extractTranscriptFailure = (raw: string): string => {
+  const recent = raw
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .slice(-40)
+    .reverse();
+  for (const line of recent) {
+    if (line.includes('"is_error":true') || line.includes('"is_error": true')) return line;
+  }
+  return "";
+};
+
+/** Harness id from JEV_HARNESS when valid, else the fallback. */
+const harnessFromEnv = (fallback: Harness): Harness => {
+  const value = process.env.JEV_HARNESS;
+  const decoded = value === undefined ? Option.none() : Schema.decodeUnknownOption(Harness)(value);
+  return Option.isSome(decoded) ? decoded.value : fallback;
+};
+
+export type CliServices = JevClient | EventLog | LoopGuard;
+
 export function runCli(
   argv: ReadonlyArray<string>,
-  layers: Layer.Layer<JevClient | EventLog>,
+  layers: Layer.Layer<CliServices>,
   stdin: () => Effect.Effect<string, string> = readStdin,
 ): Effect.Effect<number> {
   const [command, ...rest] = argv;
 
-  const program: Effect.Effect<number, string, JevClient | EventLog> = Effect.gen(function* () {
+  const program: Effect.Effect<number, string, CliServices> = Effect.gen(function* () {
     switch (command) {
       case "ask": {
         const client = yield* JevClient;
@@ -125,12 +151,7 @@ export function runCli(
             () => "invalid ask payload on stdin: expected {state, questions, model?}",
           ),
         );
-        const harnessFlag = process.env.JEV_HARNESS;
-        const decodedHarness =
-          harnessFlag === undefined
-            ? Option.none()
-            : Schema.decodeUnknownOption(Harness)(harnessFlag);
-        const harness = Option.isSome(decodedHarness) ? decodedHarness.value : "cli";
+        const harness = harnessFromEnv("cli");
         const result = yield* client
           .ask({
             harness,
@@ -231,6 +252,98 @@ export function runCli(
         });
         return 0;
       }
+      case "triage": {
+        if (rest[0] !== "failure") {
+          yield* Effect.sync(() => {
+            console.error(
+              "usage: jev triage failure [--text FILE|-] [--transcript FILE]   (default: read stdin)",
+            );
+          });
+          return 1;
+        }
+        const client = yield* JevClient;
+        const guard = yield* LoopGuard;
+        const log = yield* EventLog;
+        const harness = harnessFromEnv("cli");
+        const textFlag = flag(rest, "--text");
+        const transcriptFlag = flag(rest, "--transcript");
+        let failureText: string;
+        let source: string;
+        if (transcriptFlag !== undefined) {
+          const raw = yield* Effect.tryPromise({
+            try: () => readFile(transcriptFlag, "utf8"),
+            catch: () => `cannot read transcript: ${transcriptFlag}`,
+          });
+          failureText = extractTranscriptFailure(raw);
+          if (failureText.length === 0) {
+            yield* Effect.sync(() => {
+              console.error("no failing entry found in the transcript's last 40 lines");
+            });
+            return 1;
+          }
+          source = "transcript";
+        } else if (textFlag !== undefined && textFlag !== "-") {
+          failureText = yield* Effect.tryPromise({
+            try: () => readFile(textFlag, "utf8"),
+            catch: () => `cannot read failure text: ${textFlag}`,
+          });
+          source = "text";
+        } else {
+          failureText = yield* stdin();
+          source = "stdin";
+        }
+
+        const fp = fingerprint(failureText);
+        const loop = yield* guard
+          .check(fp)
+          .pipe(Effect.mapError((error) => `loop state ${error.operation} failed`));
+        const result = yield* client
+          .ask({
+            harness,
+            state: { source, repeats: loop.count, failure: clip(redact(failureText)) },
+            questions: failureQuestions({ text: failureText, source, repeats: loop.count }),
+          })
+          .pipe(Effect.mapError(describeJevError));
+
+        const classAnswer = result.answers["class"];
+        const blocksAnswer = result.answers["blocks_work"];
+        const suppressAnswer = result.answers["safe_to_suppress"];
+        const blocks = blocksAnswer?._tag === "noul" ? blocksAnswer.noul : 0;
+        const suppress = suppressAnswer?._tag === "noul" ? suppressAnswer.noul : 0;
+        const now = yield* Clock.currentTimeMillis;
+        yield* log
+          .append({
+            _tag: "triage",
+            ts: new Date(now).toISOString(),
+            harness,
+            feature: "failure",
+            summary: {
+              repeats: loop.count,
+              escalate: loop.escalated ? 1 : 0,
+              blocks_work: blocks,
+              safe_to_suppress: suppress,
+            },
+          })
+          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+        yield* Effect.sync(() => {
+          if (classAnswer?._tag === "choice") {
+            console.log(
+              `failure class: ${classAnswer.choice} (confidence ${classAnswer.confidence})`,
+            );
+          }
+          if (blocksAnswer?._tag === "noul")
+            console.log(`blocks_work: p(yes)=${blocksAnswer.noul}`);
+          if (suppressAnswer?._tag === "noul") {
+            console.log(`safe_to_suppress: p(yes)=${suppressAnswer.noul}`);
+          }
+          if (loop.escalated) {
+            console.log(
+              `ESCALATE: repeated failure (${loop.count}x, fingerprint ${fp}) — fix the root cause or suppress this session explicitly`,
+            );
+          }
+        });
+        return 0;
+      }
       case "hook": {
         if (rest[0] !== "prompt") {
           yield* Effect.sync(() => {
@@ -252,12 +365,7 @@ export function runCli(
       }
       case "mcp": {
         const client = yield* JevClient;
-        const harnessFlag = process.env.JEV_HARNESS;
-        const decodedHarness =
-          harnessFlag === undefined
-            ? Option.none()
-            : Schema.decodeUnknownOption(Harness)(harnessFlag);
-        const harness = Option.isSome(decodedHarness) ? decodedHarness.value : "script";
+        const harness = harnessFromEnv("script");
         yield* Effect.tryPromise({
           try: () => serveMcp(createMcpDeps(harness, client.ask)),
           catch: () => "mcp server failed",
@@ -309,6 +417,7 @@ if (isEntrypoint) {
   const eventLog = EventLogLive(eventsPath());
   const layers = Layer.mergeAll(
     eventLog,
+    LoopGuardLive(loopStatePath()),
     JevClientLive({ apiKey, transport }).pipe(Layer.provide(eventLog)),
   );
   const code = await Effect.runPromise(runCli(process.argv.slice(2), layers));

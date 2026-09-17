@@ -10,6 +10,10 @@ export function eventsPath(): string {
   return join(dataDir(), "events.jsonl");
 }
 
+export function loopStatePath(): string {
+  return join(dataDir(), "loop-state.json");
+}
+
 export function apiEndpoint(): string {
   return process.env.JEV_ENDPOINT ?? "https://api.typesafe.ai/v1/systemone";
 }

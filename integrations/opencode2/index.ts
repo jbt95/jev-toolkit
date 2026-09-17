@@ -12,8 +12,20 @@
 // directory's node_modules (bun install here); `effect` never enters the
 // plugin, so the repo keeps a single `effect` instance.
 import { Plugin } from "@opencode/plugin";
+import { execFile } from "node:child_process";
 import { CONTEXT_POLICY, PROMPT_DIRECTIVE } from "../../src/core/directives.ts";
 import { matchQuantitativeClaim } from "../../src/core/detector.ts";
+
+/** Best-effort failure triage via the CLI; never blocks or throws. */
+const triageFailure = (text: string): void => {
+  const child = execFile(
+    "jev",
+    ["triage", "failure"],
+    { env: { ...process.env, JEV_HARNESS: "opencode2" } },
+    () => {},
+  );
+  child.stdin?.end(text.slice(0, 4000));
+};
 
 export default Plugin.define({
   id: "typesafe",
@@ -25,6 +37,10 @@ export default Plugin.define({
 
     await ctx.session.hook("context", (event) => {
       event.system.push({ type: "text", text: CONTEXT_POLICY });
+    });
+
+    await ctx.tool.hook("execute.after", (event) => {
+      if (event.status === "error") triageFailure(event.error.message);
     });
   },
 });

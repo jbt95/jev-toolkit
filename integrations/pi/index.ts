@@ -105,4 +105,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
     if (!result.ok || directive.length === 0) return;
     return { action: "transform", text: `${event.text}\n\n${directive}` };
   });
+
+  pi.on("tool_result", (event) => {
+    if (!event.isError) return;
+    void runJev(["triage", "failure"], JSON.stringify(event.content).slice(0, 4000), harness);
+  });
 }

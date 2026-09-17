@@ -1,0 +1,5 @@
+---- cli::ask_harness stdout ----
+assertion `left == right` failed
+  left: "omp"
+ right: "pi"
+thread 'cli::ask_harness' panicked at src/cli/main.test.ts:64:5
