@@ -254,6 +254,8 @@ if [ "$run_operator" -eq 1 ]; then
   check_contains "hook prompt fires" "typesafe_ask" "$hook_hit"
   hook_miss=$(printf '%s' '{"prompt":"rename local variable x"}' | jev hook prompt)
   check_eq "hook prompt stays quiet" "" "$hook_miss"
+  hook_verify=$(printf '%s' '{"prompt":"Should we ship the parser refactor today?"}' | jev hook prompt --verify)
+  check_contains "hook prompt --verify confirms" "typesafe_ask" "$hook_verify"
 
   echo "== check commit =="
   set +e
