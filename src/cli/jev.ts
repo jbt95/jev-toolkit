@@ -917,6 +917,8 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     if (Option.isSome(replayFlag)) {
       const requested = Number.parseInt(replayFlag.value, 10);
       const count = Number.isNaN(requested) ? 10 : requested;
+      // Trust boundary: repo is operator-controlled cwd for this local-only tool.
+      // gitLog uses execFile argv (no shell) and fails closed on bad paths.
       const repo = flag(rest, "--repo").pipe(Option.getOrElse(() => "."));
       const commits = yield* Effect.tryPromise({
         try: () => gitLog(repo, count),
