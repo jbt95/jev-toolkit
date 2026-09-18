@@ -1,16 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { matchQuantitativeClaim } from "../../src/core/detector.ts";
 import { PROMPT_DIRECTIVE } from "../../src/core/directives.ts";
 import {
-  appendHookFire,
-  hookFireLogPath,
   jevPromptRecall,
   lastUserText,
   PROMPT_ECHO,
-  recallMatch,
   registerJevPlugin,
 } from "../../integrations/opencode/index.ts";
 import { jevPromptRecall as piRecall } from "../../integrations/pi/index.ts";
@@ -77,21 +71,6 @@ const userMessage = (text: string) => ({
   content: [{ type: "text", text }],
 });
 
-// Hook tests write telemetry; isolate every test from the real data dir.
-let previousDataDir: string | undefined;
-let dataDir: string;
-
-beforeEach(async () => {
-  previousDataDir = process.env.JEV_DATA_DIR;
-  dataDir = await mkdtemp(join(tmpdir(), "jev-hook-fire-"));
-  process.env.JEV_DATA_DIR = dataDir;
-});
-
-afterEach(() => {
-  if (previousDataDir === undefined) delete process.env.JEV_DATA_DIR;
-  else process.env.JEV_DATA_DIR = previousDataDir;
-});
-
 describe("jevPromptRecall (opencode)", () => {
   it("fires on the ticket-approach prompt that previously slipped through", () => {
     expect(jevPromptRecall("what should be the best approach to implement this ticket")).toBe(true);
@@ -151,81 +130,6 @@ describe("lastUserText", () => {
   });
 });
 
-describe("recallMatch", () => {
-  it("names the first matching pattern for routed prompts", () => {
-    expect(recallMatch("what should be the best approach to implement this ticket")).toBe(
-      "ranking",
-    );
-    expect(recallMatch("What is the implementation plan for the export?")).toBe("choice");
-    expect(recallMatch("Coverage is 82%.")).toBe("percent");
-  });
-
-  it("returns undefined when nothing matches", () => {
-    expect(recallMatch("status: all systems nominal")).toBeUndefined();
-  });
-});
-
-describe("hook-fire telemetry", () => {
-  const fireLog = (): Promise<string> => readFile(join(dataDir, "hook-fires.jsonl"), "utf8");
-
-  it("records pattern, session, and excerpt on a match", async () => {
-    const handler = loadHandler();
-    handler({
-      sessionID: "ses-test",
-      system: [],
-      messages: [userMessage("what should be the best approach to implement this ticket")],
-    });
-    const entry = JSON.parse((await fireLog()).trim());
-    expect(entry.sessionID).toBe("ses-test");
-    expect(entry.pattern).toBe("ranking");
-    expect(entry.excerpt).toContain("best approach");
-    expect(entry.directivePushed).toBe(true);
-    expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(entry.ts)).toBe(true);
-  });
-
-  it("writes nothing on neutral prompts", async () => {
-    const handler = loadHandler();
-    handler({ system: [], messages: [userMessage("status: all systems nominal")] });
-    await expect(fireLog()).rejects.toThrow();
-  });
-
-  it("still logs when the directive was already present", async () => {
-    const handler = loadHandler();
-    handler({
-      system: [{ type: "text" as const, text: PROMPT_DIRECTIVE }],
-      messages: [userMessage("compare backend xlsx against a csv export")],
-    });
-    expect(JSON.parse((await fireLog()).trim()).directivePushed).toBe(false);
-  });
-
-  it("never throws when the log directory is unusable", async () => {
-    const blocker = join(dataDir, "blocker");
-    await writeFile(blocker, "x");
-    process.env.JEV_DATA_DIR = join(blocker, "nested");
-    const handler = loadHandler();
-    const event = { system: [], messages: [userMessage("which option is best?")] };
-    expect(() => handler(event)).not.toThrow();
-    expect(event.system).toHaveLength(1);
-    expect(() =>
-      appendHookFire(
-        {
-          ts: "t",
-          sessionID: "",
-          hook: "context",
-          pattern: "p",
-          excerpt: "",
-          directivePushed: true,
-        },
-        join(blocker, "nested", "hook-fires.jsonl"),
-      ),
-    ).not.toThrow();
-  });
-
-  it("honors JEV_DATA_DIR for the log path", () => {
-    expect(hookFireLogPath()).toBe(join(dataDir, "hook-fires.jsonl"));
-  });
-});
-
 describe("handleSessionPrompt", () => {
   it("appends the echo verbatim on a match", () => {
     const { prompt } = loadHandlers();
@@ -255,19 +159,6 @@ describe("handleSessionPrompt", () => {
     const event: HookEvent = { prompt: {} };
     expect(() => prompt(event)).not.toThrow();
     expect(event.prompt?.text).toBeUndefined();
-  });
-
-  it("logs prompt-hook fires distinctly from context fires", async () => {
-    const { prompt } = loadHandlers();
-    prompt({
-      sessionID: "ses-echo",
-      prompt: { text: "how should we design the export endpoint?" },
-    });
-    const entry = JSON.parse((await readFile(join(dataDir, "hook-fires.jsonl"), "utf8")).trim());
-    expect(entry.hook).toBe("prompt");
-    expect(entry.sessionID).toBe("ses-echo");
-    expect(entry.pattern).toBe("choice");
-    expect(entry.directivePushed).toBe(true);
   });
 });
 
