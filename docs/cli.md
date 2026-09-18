@@ -142,7 +142,7 @@ ignoring the code keeps the hook warn-only.
 ## audit run — claim detection and compliance
 
 ```console
-jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run]
+jev audit run [--since 24h] [--harness all|opencode|claude-code|pi|omp] [--dry-run]
 ```
 
 Pipeline: extract assistant messages → prose-only state (fenced code stripped,
@@ -154,7 +154,7 @@ events. See [architecture.md](architecture.md#audit-pipeline-jev-audit-run).
 ```console
 $ jev audit run --since 2h --dry-run
 harness        messages detected matched missed compliance (dry run)
-opencode2      97       4         0       4      0.0%
+opencode      97       4         0       4      0.0%
 total: messages=97 detected=4 matched=0 (detection rate 4.1%)
 ```
 

@@ -164,7 +164,7 @@ describe("metrics", () => {
       {
         _tag: "review",
         ts: "2026-09-17T00:09:00.000Z",
-        harness: "opencode2",
+        harness: "opencode",
         sessionID: "s3",
         model: "jev-1.13.0",
         dimensions: {
@@ -178,19 +178,19 @@ describe("metrics", () => {
 
     const reviewedBody = render(collect(reviewed));
 
-    expect(reviewedBody).toContain('jev_reviews_total{harness="opencode2"} 1');
+    expect(reviewedBody).toContain('jev_reviews_total{harness="opencode"} 1');
     expect(reviewedBody).toContain(
-      'jev_review_score{dimension="correctness",harness="opencode2"} 0.75',
+      'jev_review_score{dimension="correctness",harness="opencode"} 0.75',
     );
     expect(reviewedBody).toContain(
-      'jev_review_score{dimension="test_quality",harness="opencode2"} 0.5',
+      'jev_review_score{dimension="test_quality",harness="opencode"} 0.5',
     );
     expect(reviewedBody).not.toContain('dimension="security"');
     expect(reviewedBody).toContain(
-      'jev_review_direction_total{harness="opencode2",direction="improved"} 1',
+      'jev_review_direction_total{harness="opencode",direction="improved"} 1',
     );
     expect(reviewedBody).toContain(
-      'jev_review_direction_total{harness="opencode2",direction="regressed"} 1',
+      'jev_review_direction_total{harness="opencode",direction="regressed"} 1',
     );
   });
 

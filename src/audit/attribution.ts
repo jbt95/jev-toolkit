@@ -159,6 +159,6 @@ export function loadOpencodeTurns(
         db.close();
       }
     },
-    catch: () => new AuditError({ source: "opencode2" }),
+    catch: () => new AuditError({ source: "opencode" }),
   });
 }

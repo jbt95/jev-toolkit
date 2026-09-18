@@ -70,7 +70,7 @@ describe("session digests", () => {
 
     expect(digests).toHaveLength(1);
     const digest = digests[0];
-    expect(digest?.harness).toBe("opencode2");
+    expect(digest?.harness).toBe("opencode");
     expect(digest?.sessionID).toBe("ses-1");
     expect(digest?.userPrompts).toEqual(["fix the failing test"]);
     expect(digest?.assistantTurns).toBe(1);

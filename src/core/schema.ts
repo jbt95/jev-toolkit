@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-export const Harness = Schema.Literals(["opencode2", "claude-code", "pi", "omp", "cli", "script"]);
+export const Harness = Schema.Literals(["opencode", "claude-code", "pi", "omp", "cli", "script"]);
 export type Harness = Schema.Schema.Type<typeof Harness>;
 
 /** Claim taxonomy shared by detection questions, opportunity events, and quoting. */

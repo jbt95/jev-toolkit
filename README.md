@@ -108,7 +108,7 @@ src/mcp/server.ts   stdio MCP server (jev mcp) — the judgment tool surface
 src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | mcp | meter
 src/question-packs/ detection, alignment, reviewer, failure, commit, session labels
 src/eval/          pack lab: fixture replay, answer drift, and agreement reports
-src/audit/          message extractors (opencode2 DB, claude projects, pi/omp logs)
+src/audit/          message extractors (opencode DB, claude projects, pi/omp logs)
 src/replay/         review-fixture capture/score measurement aid
 tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
@@ -130,12 +130,12 @@ npm run lint && npm run format:check && npm run typecheck && npm test
 Tests are offline by design: fake transports, temp dirs, `127.0.0.1` only, no
 module mocking.
 
-An end-to-end smoke test (live TypeSafe API plus a real opencode2 session) is
+An end-to-end smoke test (live TypeSafe API plus a real opencode session) is
 operator-run and never part of `npm test`:
 
 ```console
-scripts/smoke-opencode2.sh            # agent session + operator checks
-scripts/smoke-opencode2.sh --no-agent # operator checks only
+scripts/smoke-opencode.sh            # agent session + operator checks
+scripts/smoke-opencode.sh --no-agent # operator checks only
 ```
 
 ## Privacy

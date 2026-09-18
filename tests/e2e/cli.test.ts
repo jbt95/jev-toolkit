@@ -43,7 +43,7 @@ const envFor = (api: FakeApi, dataDir: string) => ({
   TYPESAFE_API_KEY: "test-key",
   JEV_ENDPOINT: api.url,
   JEV_DATA_DIR: dataDir,
-  JEV_HARNESS: "opencode2",
+  JEV_HARNESS: "opencode",
 });
 
 interface RunResult {
@@ -112,7 +112,7 @@ describe("jev CLI end to end", () => {
     expect(result.stdout).toContain("p(yes)=0.99");
     const calls = await callEvents(dataDir);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.harness).toBe("opencode2");
+    expect(calls[0]?.harness).toBe("opencode");
     expect(calls[0]?.sessionID).toBe("ses_e2e");
     expect(calls[0]?.status).toBe("ok");
   });

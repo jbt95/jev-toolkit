@@ -156,7 +156,7 @@ The model judges; code composes. Thresholds (`>= 0.5`, `>= 0.6`, severity
 ```mermaid
 flowchart LR
   subgraph extract["Extract messages"]
-    OC["opencode2 DB<br/>session_message"]
+    OC["opencode DB<br/>session_message"]
     CC["~/.claude/projects"]
     PO["pi / omp session logs"]
   end

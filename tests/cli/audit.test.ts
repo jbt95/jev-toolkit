@@ -50,7 +50,7 @@ describe("jev audit", () => {
       makeEventLog(path).append({
         _tag: "call",
         ts: new Date().toISOString(),
-        harness: "opencode2",
+        harness: "opencode",
         sessionID: "sess-1",
         model: "jev-test",
         latencyMs: 5,
@@ -61,12 +61,12 @@ describe("jev audit", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
-      runCli(["audit", "run", "--harness", "opencode2"], cliLayers(path, respond)),
+      runCli(["audit", "run", "--harness", "opencode"], cliLayers(path, respond)),
     );
 
     expect(code).toBe(0);
     const output = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(output).toContain("opencode2");
+    expect(output).toContain("opencode");
     expect(output).toContain("100.0%");
     const events = await Effect.runPromise(makeEventLog(path).read());
     const opportunities = events.filter((event) => event._tag === "opportunity");
@@ -90,7 +90,7 @@ describe("jev audit", () => {
       makeEventLog(path).append({
         _tag: "call",
         ts: new Date().toISOString(),
-        harness: "opencode2",
+        harness: "opencode",
         // No sessionID: the MCP transport cannot carry one.
         model: "jev-test",
         latencyMs: 5,
@@ -104,7 +104,7 @@ describe("jev audit", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
-      runCli(["audit", "run", "--harness", "opencode2"], cliLayers(path, respond)),
+      runCli(["audit", "run", "--harness", "opencode"], cliLayers(path, respond)),
     );
 
     expect(code).toBe(0);
@@ -125,7 +125,7 @@ describe("jev audit", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
-      runCli(["audit", "run", "--harness", "opencode2", "--dry-run"], cliLayers(path, respond)),
+      runCli(["audit", "run", "--harness", "opencode", "--dry-run"], cliLayers(path, respond)),
     );
 
     expect(code).toBe(0);

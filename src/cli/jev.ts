@@ -542,7 +542,7 @@ const extractAuditMessages = (
 ): Effect.Effect<ReadonlyArray<RawMessage>, string> =>
   Effect.gen(function* () {
     const messages: Array<RawMessage> = [];
-    if (wants("opencode2")) {
+    if (wants("opencode")) {
       // Both surfaces: user turns are the demand signal, assistant turns the
       // published claims. Each keeps its source so compliance can be split.
       const dbPath = opencodeDbPath();
@@ -610,7 +610,7 @@ const buildSessionQuestions = (
   for (const event of events) {
     if (event._tag !== "call") continue;
     let sessionID = Option.fromUndefinedOr(event.sessionID);
-    if (Option.isNone(sessionID) && event.harness === "opencode2") {
+    if (Option.isNone(sessionID) && event.harness === "opencode") {
       sessionID = Option.fromUndefinedOr(inferredSessions.get(unattributed));
       unattributed += 1;
     }
@@ -705,7 +705,7 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     if (rest[0] !== "run") {
       yield* Effect.sync(() => {
         console.error(
-          "usage: jev audit run [--since 24h] [--harness all|opencode2|claude-code|pi|omp] [--dry-run] | jev audit prompts [--since 7d]",
+          "usage: jev audit run [--since 24h] [--harness all|opencode|claude-code|pi|omp] [--dry-run] | jev audit prompts [--since 7d]",
         );
       });
       return 1;
@@ -730,11 +730,11 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     // the MCP transport cannot pass one, so matching the call's question ids
     // against the assistant turn that contains them restores the link offline.
     const opencodeCalls = events.flatMap((event) =>
-      event._tag === "call" && event.harness === "opencode2" && event.sessionID === undefined
+      event._tag === "call" && event.harness === "opencode" && event.sessionID === undefined
         ? [event]
         : [],
     );
-    const turns = wants("opencode2")
+    const turns = wants("opencode")
       ? yield* loadOpencodeTurns(opencodeDbPath(), sinceIso).pipe(
           Effect.mapError((error) => `audit failed: ${error.source}`),
         )
@@ -780,7 +780,7 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
 
     const collected: Array<SessionDigest> = [];
-    if (wants("opencode2")) {
+    if (wants("opencode")) {
       collected.push(
         ...(yield* digestOpencode(opencodeDbPath(), sinceIso).pipe(
           Effect.mapError((error) => `session digest failed: ${error.source}`),

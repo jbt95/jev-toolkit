@@ -165,7 +165,7 @@ export function extractOpencode(
           if (Option.isNone(text)) continue;
           messages.push(
             ...Option.toArray(
-              messageFromText("opencode2", decodedRow.value.session_id, source, text.value),
+              messageFromText("opencode", decodedRow.value.session_id, source, text.value),
             ),
           );
         }
@@ -174,7 +174,7 @@ export function extractOpencode(
         db.close();
       }
     },
-    catch: () => new AuditError({ source: "opencode2" }),
+    catch: () => new AuditError({ source: "opencode" }),
   });
 }
 

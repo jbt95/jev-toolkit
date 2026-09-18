@@ -42,10 +42,7 @@ describe("jev label", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
-      runCli(
-        ["label", "sessions", "--harness", "opencode2", "--dry-run"],
-        cliLayers(path, respond),
-      ),
+      runCli(["label", "sessions", "--harness", "opencode", "--dry-run"], cliLayers(path, respond)),
     );
 
     expect(code).toBe(0);
@@ -59,7 +56,7 @@ describe("jev label", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
-      runCli(["label", "sessions", "--harness", "opencode2"], cliLayers(path, respond)),
+      runCli(["label", "sessions", "--harness", "opencode"], cliLayers(path, respond)),
     );
 
     expect(code).toBe(0);

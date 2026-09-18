@@ -1,7 +1,7 @@
 #!/bin/sh
-# End-to-end smoke test: opencode2 + jev-toolkit.
+# End-to-end smoke test: opencode + jev-toolkit.
 #
-# Launches a real opencode2 session with a generic four-part task (deploy
+# Launches a real opencode session with a generic four-part task (deploy
 # judgment, claim check, code review, commit message) that the jev tools serve
 # WITHOUT naming them, to test whether the agent discovers and routes through
 # the tools on its own. Then checks the event log those calls produced and
@@ -18,14 +18,14 @@
 # wiring or pack changes.
 #
 # Usage:
-#   scripts/smoke-opencode2.sh [--keep] [--agent-only] [--no-agent]
+#   scripts/smoke-opencode.sh [--keep] [--agent-only] [--no-agent]
 #
 #   --keep        keep the temp workspace and logs even on success
 #   --agent-only  skip the operator CLI checks
-#   --no-agent    skip the opencode2 session; only run operator checks
+#   --no-agent    skip the opencode session; only run operator checks
 #
 # Env:
-#   JEV_SMOKE_OPENCODE opencode binary to run (default: opencode2)
+#   JEV_SMOKE_OPENCODE opencode binary to run (default: opencode)
 #   JEV_SMOKE_MODEL    model for the opencode session (provider/model)
 #   JEV_SMOKE_TIMEOUT  seconds before the agent session is killed (default 420)
 
@@ -44,7 +44,7 @@ for arg in "$@"; do
   esac
 done
 
-opencode_bin="${JEV_SMOKE_OPENCODE:-opencode2}"
+opencode_bin="${JEV_SMOKE_OPENCODE:-opencode}"
 
 # ---------------------------------------------------------------- preflight
 for tool in "$opencode_bin" jev jq git curl; do
@@ -62,7 +62,7 @@ fi
 root=$(mktemp -d "${TMPDIR:-/tmp}/jev-smoke.XXXXXX")
 workspace="$root/project"
 export JEV_DATA_DIR="$root/data"
-export JEV_HARNESS=opencode2
+export JEV_HARNESS=opencode
 mkdir -p "$JEV_DATA_DIR" "$workspace/src"
 
 failures=0
@@ -295,11 +295,11 @@ EOF
   check_contains "pack lab agrees with the fixture" "agreed=1" "$eval_out"
 
   echo "== audit, label =="
-  audit_out=$(jev audit run --since 1h --harness opencode2 --dry-run)
-  check_contains "audit run scans opencode2" "opencode2" "$audit_out"
+  audit_out=$(jev audit run --since 1h --harness opencode --dry-run)
+  check_contains "audit run scans opencode" "opencode" "$audit_out"
   prompts_out=$(jev audit prompts --since 1h)
   check_contains "audit prompts measures the trigger" "prompts=" "$prompts_out"
-  label_out=$(jev label sessions --since 1h --harness opencode2 --dry-run)
+  label_out=$(jev label sessions --since 1h --harness opencode --dry-run)
   check_contains "label sessions digests" '"sessions"' "$label_out"
 
   echo "== meter =="

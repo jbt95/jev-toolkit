@@ -254,7 +254,7 @@ const digestOpencodeSession = (
     accumulateOpencodeAssistant(draft, data);
   }
   draft.startedAt = new Date(session.time_created).toISOString();
-  return draftDigest("opencode2", session.id, draft, session.cost);
+  return draftDigest("opencode", session.id, draft, session.cost);
 };
 
 export function digestOpencode(
@@ -282,7 +282,7 @@ export function digestOpencode(
         db.close();
       }
     },
-    catch: () => new SessionAuditError({ source: "opencode2" }),
+    catch: () => new SessionAuditError({ source: "opencode" }),
   });
 }
 
