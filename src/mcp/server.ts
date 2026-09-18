@@ -207,8 +207,10 @@ const REVIEW_INPUT_SCHEMA: JsonValue = {
 const ASK_DESCRIPTION =
   "Ask TypeSafe/Jev typed questions over a state and get calibrated, structured answers. " +
   "Primitives: choice (pick one of a defined set), noul (probability of yes), score " +
-  "(probability-weighted rating across ordered levels). Use for narrow judgments the code " +
-  "path needs: routing, ranking, extraction, verification. Every call is logged locally.";
+  "(probability-weighted rating across ordered levels). Call before writing any probability, " +
+  "ranking, comparison, choice among alternatives, or graded estimate (severity, risk, quality, " +
+  "relevance, difficulty); report the answer with its confidence as from Jev, and treat " +
+  "confidence below 0.4 as no signal. Every call is logged locally.";
 
 const VERIFY_DESCRIPTION =
   "Verify claims against supplied evidence before publishing them. Code reports which claim " +
