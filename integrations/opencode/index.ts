@@ -1,15 +1,18 @@
 // Jev prompt-recall plugin for OpenCode V2 (native, zero-dependency).
 //
-// Registers a `context` session hook: before each agent-loop model call, the
-// latest user text is run through the recall prefilter (a mirror of
-// `src/core/detector.ts` PATTERNS); on a match the Jev directive is pushed
-// onto `event.system`. Non-blocking and silent otherwise.
+// Two hooks, one prefilter (a mirror of `src/core/detector.ts` PATTERNS):
 //
-// Only the `context` hook is used, deliberately. Per the V2 plugins guide the
-// `prompt` hook rewrites canonical persisted user input, while `context`
-// changes affect only the outgoing model call — the directive must never
-// pollute history. Auxiliary requests (`title`, `compaction`, `generate`)
-// are skipped so background calls stay quiet.
+// - `prompt`: when the incoming user text asks for a routed judgment, append a
+//   task-specific echo to the prompt itself. This speaks to the observed
+//   failure mode — the model explores the code, then treats its derived
+//   recommendation as a lookup rather than a judgment. Appending keeps the
+//   instruction in user-visible text, which survives better than system
+//   context. Edits are end-appends only, so attachment mention offsets are
+//   unaffected, and the echo is skipped when already present (retry-safe).
+// - `context`: before each agent-loop model call, push the Jev directive onto
+//   `event.system` when the latest user text matches. Changes affect only the
+//   outgoing call, never persisted history. Auxiliary requests (`title`,
+//   `compaction`, `generate`) are skipped so background calls stay quiet.
 //
 // Self-contained by necessity, like `integrations/pi/index.ts`: the host
 // loads this file directly, so `../../src/...` imports fail at load. The
@@ -61,6 +64,12 @@ const RECALL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: Re
 const RECALL_DIRECTIVE =
   "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing that judgment.";
 
+export const PROMPT_ECHO =
+  "[Jev policy] Exploring the code first does not replace this step: a code-derived " +
+  "recommendation is still a choice among alternatives. Before recommending an approach, " +
+  "call the typesafe_ask tool with the alternatives, then report its answer with " +
+  "confidence as from Jev.";
+
 const DIRECTIVE_TAG = "[Jev policy]";
 
 /** First matching pattern name, or undefined when the text needs no routing. */
@@ -79,6 +88,7 @@ export function jevPromptRecall(prompt: string): boolean {
 interface HookFireEntry {
   readonly ts: string;
   readonly sessionID: string;
+  readonly hook: "prompt" | "context";
   readonly pattern: string;
   readonly excerpt: string;
   readonly directivePushed: boolean;
@@ -125,8 +135,18 @@ interface SessionContextEvent {
   readonly messages?: ReadonlyArray<ContextMessage>;
 }
 
+interface PromptPayload {
+  text?: string;
+}
+
+interface SessionPromptEvent {
+  readonly sessionID?: string;
+  readonly prompt?: PromptPayload;
+}
+
 interface SessionHooks {
   hook(event: "context", handler: (hookEvent: SessionContextEvent) => void): Promise<void>;
+  hook(event: "prompt", handler: (hookEvent: SessionPromptEvent) => void): Promise<void>;
 }
 
 interface JevPluginContext {
@@ -164,14 +184,42 @@ export function handleSessionContext(event: SessionContextEvent): void {
   appendHookFire({
     ts: new Date().toISOString(),
     sessionID: event.sessionID ?? "",
+    hook: "context",
     pattern,
     excerpt: prompt.slice(0, 120),
     directivePushed,
   });
 }
 
+/**
+ * Append the task-specific echo to the admitted prompt itself. End-append
+ * only, so existing attachment mention offsets are unaffected; skipped when
+ * the text already carries the tag, which keeps concurrent or retried
+ * admissions from duplicating it.
+ */
+export function handleSessionPrompt(event: SessionPromptEvent): void {
+  if (event.prompt === undefined) return;
+  const text = event.prompt.text ?? "";
+  const pattern = recallMatch(text);
+  if (pattern === undefined) return;
+  if (text.includes(DIRECTIVE_TAG)) return;
+  event.prompt.text = `${text}\n\n${PROMPT_ECHO}`;
+  appendHookFire({
+    ts: new Date().toISOString(),
+    sessionID: event.sessionID ?? "",
+    hook: "prompt",
+    pattern,
+    excerpt: text.slice(0, 120),
+    directivePushed: true,
+  });
+}
+
 export function registerJevPlugin(plugin: JevPluginContext): Promise<void> {
-  return plugin.session.hook("context", handleSessionContext);
+  const registered = [
+    plugin.session.hook("context", handleSessionContext),
+    plugin.session.hook("prompt", handleSessionPrompt),
+  ];
+  return Promise.all(registered).then(() => undefined);
 }
 
 const plugin = {

@@ -1,18 +1,24 @@
 # Jev for OpenCode V2
 
 Native prompt recall plus static routing. Zero dependencies: `index.ts` has no
-imports, so no install step is needed.
+imports beyond `node:` builtins, so no install step is needed.
 
 ## What it does
 
-- `index.ts` — native plugin. Registers a `context` session hook that scans
-  the latest user text before each agent-loop model call and pushes the Jev
-  directive onto `system` when the recall prefilter matches. Only the outgoing
-  call is affected; persisted history is never rewritten. Auxiliary requests
-  (`title`, `compaction`, `generate`) are skipped.
+- `index.ts` — native plugin with two hooks sharing one recall prefilter:
+  - `prompt`: when the incoming user text asks for a routed judgment, append a
+    task-specific echo to the prompt itself. End-append only, so attachment
+    mention offsets are unaffected; skipped when already present, so retried
+    admissions never duplicate it. This addresses the observed failure mode
+    where the model explores the code and then treats its derived
+    recommendation as a lookup rather than a judgment.
+  - `context`: before each agent-loop model call, push the Jev directive onto
+    `system` when the latest user text matches. Only the outgoing call is
+    affected; persisted history is never rewritten. Auxiliary requests
+    (`title`, `compaction`, `generate`) are skipped.
 - `jev-routing.md` — versioned source of the static routing instruction.
   Install a copy to `~/.config/opencode/instructions/jev-routing.md` so every
-  session carries the policy even before the hook fires.
+  session carries the policy even before the hooks fire.
 
 The recall patterns mirror `src/core/detector.ts` (and
 `integrations/pi/index.ts`); agreement between the copies is pinned by
@@ -27,6 +33,7 @@ Every fire appends one JSONL line to `hook-fires.jsonl` next to the event log
 {
   "ts": "…",
   "sessionID": "ses_…",
+  "hook": "prompt",
   "pattern": "ranking",
   "excerpt": "what should be the best approach…",
   "directivePushed": true,

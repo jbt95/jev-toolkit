@@ -9,6 +9,7 @@ import {
   hookFireLogPath,
   jevPromptRecall,
   lastUserText,
+  PROMPT_ECHO,
   recallMatch,
   registerJevPlugin,
 } from "../../integrations/opencode/index.ts";
@@ -33,27 +34,42 @@ interface HookEvent {
   readonly sessionID?: string;
   system?: Array<HookSystemEntry>;
   readonly messages?: ReadonlyArray<HookMessage>;
+  readonly prompt?: { text?: string };
 }
 
-type ContextHandler = (event: HookEvent) => void;
+type AnyHandler = (event: HookEvent) => void;
 
-function loadHandler(): ContextHandler {
-  const handlers = new Map<string, ContextHandler>();
+interface LoadedHandlers {
+  readonly context: AnyHandler;
+  readonly prompt: AnyHandler;
+}
+
+function loadHandlers(): LoadedHandlers {
+  const handlers = new Map<string, AnyHandler>();
   const plugin = {
     session: {
-      hook: (event: "context", handler: ContextHandler): Promise<void> => {
+      hook(event: "context" | "prompt", handler: AnyHandler): Promise<void> {
         handlers.set(event, handler);
         return Promise.resolve();
       },
     },
   };
   expect(registerJevPlugin(plugin)).toBeInstanceOf(Promise);
-  const handler = handlers.get("context");
-  expect(handler).toBeDefined();
-  if (handler === undefined) {
-    throw new Error("context handler was not registered");
+  const context = handlers.get("context");
+  const prompt = handlers.get("prompt");
+  expect(context).toBeDefined();
+  expect(prompt).toBeDefined();
+  if (context === undefined || prompt === undefined) {
+    throw new Error("context and prompt handlers were not both registered");
   }
-  return handler;
+  return { context, prompt };
+}
+
+function loadHandler(): AnyHandler {
+  const { context } = loadHandlers();
+  return (event) => {
+    context(event);
+  };
 }
 
 const userMessage = (text: string) => ({
@@ -192,7 +208,14 @@ describe("hook-fire telemetry", () => {
     expect(event.system).toHaveLength(1);
     expect(() =>
       appendHookFire(
-        { ts: "t", sessionID: "", pattern: "p", excerpt: "", directivePushed: true },
+        {
+          ts: "t",
+          sessionID: "",
+          hook: "context",
+          pattern: "p",
+          excerpt: "",
+          directivePushed: true,
+        },
         join(blocker, "nested", "hook-fires.jsonl"),
       ),
     ).not.toThrow();
@@ -200,6 +223,51 @@ describe("hook-fire telemetry", () => {
 
   it("honors JEV_DATA_DIR for the log path", () => {
     expect(hookFireLogPath()).toBe(join(dataDir, "hook-fires.jsonl"));
+  });
+});
+
+describe("handleSessionPrompt", () => {
+  it("appends the echo verbatim on a match", () => {
+    const { prompt } = loadHandlers();
+    const event = { prompt: { text: "what should be the best approach to implement this ticket" } };
+    prompt(event);
+    expect(event.prompt.text).toBe(
+      "what should be the best approach to implement this ticket\n\n" + PROMPT_ECHO,
+    );
+  });
+
+  it("stays silent on neutral prompts", () => {
+    const { prompt } = loadHandlers();
+    const event = { prompt: { text: "fix the typo in the readme" } };
+    prompt(event);
+    expect(event.prompt.text).toBe("fix the typo in the readme");
+  });
+
+  it("never duplicates the echo on retried admissions", () => {
+    const { prompt } = loadHandlers();
+    const event = { prompt: { text: "which option is best?\n\n" + PROMPT_ECHO } };
+    prompt(event);
+    expect(event.prompt.text).toBe("which option is best?\n\n" + PROMPT_ECHO);
+  });
+
+  it("stays silent when the prompt carries no text", () => {
+    const { prompt } = loadHandlers();
+    const event: HookEvent = { prompt: {} };
+    expect(() => prompt(event)).not.toThrow();
+    expect(event.prompt?.text).toBeUndefined();
+  });
+
+  it("logs prompt-hook fires distinctly from context fires", async () => {
+    const { prompt } = loadHandlers();
+    prompt({
+      sessionID: "ses-echo",
+      prompt: { text: "how should we design the export endpoint?" },
+    });
+    const entry = JSON.parse((await readFile(join(dataDir, "hook-fires.jsonl"), "utf8")).trim());
+    expect(entry.hook).toBe("prompt");
+    expect(entry.sessionID).toBe("ses-echo");
+    expect(entry.pattern).toBe("choice");
+    expect(entry.directivePushed).toBe(true);
   });
 });
 
