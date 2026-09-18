@@ -6,28 +6,38 @@ import { DatabaseSync } from "node:sqlite";
 import { AuditError } from "./opportunities.ts";
 
 /**
- * The MCP transport cannot carry a harness session id, so a `typesafe_ask` call
- * only records one when the model remembers to pass it. In practice almost none
- * do, which left every opportunity unmatched. This recovers the link offline by
- * matching a call's question ids against the assistant turn that actually issued
- * the ask — the tool part's code/first-class arguments, never the surrounding
- * prose. The toolkit's own triage calls are not tool parts, so they never match.
+ * The MCP transport cannot carry a harness session id, so a Jev call only
+ * records one when the model remembers to pass it. In Code Mode the model
+ * calls Jev through the `execute` wrapper (`tools.jev.typesafe_*` in code),
+ * which never passes one either — in practice almost no opencode call carries
+ * a session id, which left every opportunity unmatched. This recovers the link
+ * offline by matching a call's question ids against the assistant turn that
+ * actually issued the ask — the tool part's code/first-class arguments, never
+ * the surrounding prose. `typesafe_verify` and `typesafe_review` generate
+ * their question ids server-side, so their ids never appear at the call site;
+ * those fall back to the nearest turn that invoked the same tool.
  */
 export interface CallFingerprint {
   readonly questionIDs: ReadonlyArray<string>;
   readonly atMs: number;
 }
 
-/** One assistant turn that issued at least one `typesafe_ask`. */
+/** One assistant turn that issued at least one Jev call. */
 export interface SessionTurn {
   readonly sessionID: string;
   readonly startMs: number;
   readonly endMs: number;
-  /** Text from the ask invocations only: the call code and question keys. */
+  /** Text from the Jev invocations only: the call code and question keys. */
   readonly askText: string;
+  /** Which Jev tools the turn invoked. */
+  readonly markers: ReadonlyArray<string>;
 }
 
-const ASK_TOOL = "typesafe_ask";
+const JEV_TOOL_MARKERS: ReadonlyArray<string> = [
+  "typesafe_ask",
+  "typesafe_verify",
+  "typesafe_review",
+];
 
 const ToolInput = Schema.Struct({
   code: Schema.optional(Schema.String),
@@ -62,17 +72,28 @@ const distanceToTurn = (turn: SessionTurn, atMs: number): number => {
   return 0;
 };
 
-/** The text of every `typesafe_ask` issued in one assistant message, or "". */
-const askTextOf = (data: string): string => {
+interface JevInvocation {
+  readonly text: string;
+  readonly markers: ReadonlyArray<string>;
+}
+
+/** The text of every Jev call issued in one assistant message, or "". */
+const jevInvocationOf = (data: string): JevInvocation => {
   const decoded = decodeAssistantData(data);
-  if (Option.isNone(decoded)) return "";
+  if (Option.isNone(decoded)) return { text: "", markers: [] };
   const fragments: Array<string> = [];
+  const markers: Array<string> = [];
   for (const part of decoded.value.content) {
     if (part.type !== "tool") continue;
     const input = part.state?.input;
     const code = input?.code ?? "";
-    const isAsk = (part.name ?? "").includes(ASK_TOOL) || code.includes(ASK_TOOL);
-    if (!isAsk) continue;
+    const found = JEV_TOOL_MARKERS.filter(
+      (marker) => (part.name ?? "").includes(marker) || code.includes(marker),
+    );
+    if (found.length === 0) continue;
+    for (const marker of found) {
+      if (!markers.includes(marker)) markers.push(marker);
+    }
     const questionKeys = Option.fromUndefinedOr(input?.questions).pipe(
       Option.flatMap((questions) => decodeQuestionKeys(questions)),
       Option.map((record) => Object.keys(record)),
@@ -80,12 +101,48 @@ const askTextOf = (data: string): string => {
     );
     fragments.push(code, ...questionKeys);
   }
-  return fragments.join("\n");
+  return { text: fragments.join("\n"), markers };
 };
 
 const turnMatches = (turn: SessionTurn, call: CallFingerprint): boolean =>
   call.questionIDs.every((id) => turn.askText.includes(id)) &&
   distanceToTurn(turn, call.atMs) <= ATTRIBUTION_WINDOW_MS;
+
+const VERIFY_QUESTION = /^c\d+_verdict$/;
+
+/**
+ * Server-generated question ids never appear at the call site, so they can
+ * only be linked by tool. Verify calls carry `cN_verdict` ids, review calls
+ * carry `*_applicable` / `*_score` ids; anything else is ask-shaped and keeps
+ * the id-matching path above.
+ */
+const fallbackMarker = (call: CallFingerprint): string | undefined => {
+  if (call.questionIDs.length === 0) return undefined;
+  if (call.questionIDs.every((id) => VERIFY_QUESTION.test(id))) return "typesafe_verify";
+  const isReview = call.questionIDs.some(
+    (id) => id.endsWith("_applicable") || id.endsWith("_score"),
+  );
+  return isReview ? "typesafe_review" : undefined;
+};
+
+const nearestTurnWith = (
+  turns: ReadonlyArray<SessionTurn>,
+  call: CallFingerprint,
+  marker: string,
+): SessionTurn | undefined => {
+  let best: SessionTurn | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const turn of turns) {
+    if (!turn.markers.includes(marker)) continue;
+    const distance = distanceToTurn(turn, call.atMs);
+    if (distance > ATTRIBUTION_WINDOW_MS) continue;
+    if (isBetterTurn(turn, distance, best, bestDistance)) {
+      best = turn;
+      bestDistance = distance;
+    }
+  }
+  return best;
+};
 
 /** Closer wins; an equal distance prefers the tighter turn span. */
 const isBetterTurn = (
@@ -100,9 +157,10 @@ const isBetterTurn = (
 };
 
 /**
- * Resolve one call to the session whose turn issued its question ids. Calls with
- * no question ids are un-attributable; ties resolve to the nearest turn, then
- * the tightest one.
+ * Resolve one call to the session whose turn issued its question ids, falling
+ * back to the nearest turn that invoked the same Jev tool when the ids are
+ * server-generated (verify/review). Calls with no question ids are
+ * un-attributable; ties resolve to the nearest turn, then the tightest one.
  */
 export function attributeCalls(
   turns: ReadonlyArray<SessionTurn>,
@@ -120,7 +178,12 @@ export function attributeCalls(
         bestDistance = distance;
       }
     }
-    return Option.fromUndefinedOr(best).pipe(Option.map((turn) => turn.sessionID));
+    if (best !== undefined) return Option.some(best.sessionID);
+    const marker = fallbackMarker(call);
+    if (marker === undefined) return Option.none<string>();
+    return Option.fromUndefinedOr(nearestTurnWith(turns, call, marker)).pipe(
+      Option.map((turn) => turn.sessionID),
+    );
   });
 }
 
@@ -145,13 +208,14 @@ export function loadOpencodeTurns(
         for (const row of rows) {
           const decoded = decodeTurnRow(row);
           if (Option.isNone(decoded)) continue;
-          const askText = askTextOf(decoded.value.data);
-          if (askText.length === 0) continue;
+          const invocation = jevInvocationOf(decoded.value.data);
+          if (invocation.text.length === 0) continue;
           turns.push({
             sessionID: decoded.value.session_id,
             startMs: decoded.value.time_created,
             endMs: decoded.value.time_updated,
-            askText,
+            askText: invocation.text,
+            markers: invocation.markers,
           });
         }
         return turns;

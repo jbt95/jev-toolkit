@@ -33,7 +33,7 @@ const PATTERNS: ReadonlyArray<ClaimPattern> = [
   },
   {
     name: "choice",
-    regex: /\b(?:should (?:we|i)|which (?:is|one|option|approach)|choose between)\b/i,
+    regex: /\b(?:should (?:we|i)|which (?:is|one|option|approach|plan|design)|choose between)\b/i,
   },
   {
     // A recommendation or assessment is a choice among alternatives even when
@@ -45,6 +45,19 @@ const PATTERNS: ReadonlyArray<ClaimPattern> = [
     // Explicit option comparison, with or without "should".
     name: "choice",
     regex: /\b(?:compare|contrast|weigh|decide (?:between|whether)|pick (?:one|between))\b/i,
+  },
+  {
+    // Procedural decision asks ("how should we design…", "how do we weight…").
+    // Bare "how to" is excluded: it is usually a lookup, not a judgment.
+    name: "choice",
+    regex: /\bhow (?:should|do we)\b/i,
+  },
+  {
+    // Implementation-approach asks even when no other trigger word survives
+    // ("What is the implementation plan for the export?").
+    name: "choice",
+    regex:
+      /\bwhat (?:is|should be)\b[^.?!]{0,80}\b(?:approach|plan|design|strategy|option|implement)\b/i,
   },
   { name: "choice", regex: /\b(?:versus|vs)\b/i },
 ];

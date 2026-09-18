@@ -35,11 +35,17 @@ describe("jevPromptRecall", () => {
   it("agrees with the shared detector prefilter on every battery prompt", () => {
     const prompts = [
       "what should be the best approach to implement this ticket IILC-295",
+      "What is the implementation plan for the export?",
+      "how should we design the export endpoint?",
+      "can we document how do we weight this?",
+      "which plan should we adopt?",
       "which option is best, A versus B?",
       "estimate the failure odds at roughly 30%",
       "recommend how we can achieve that",
       "compare backend xlsx against a csv export",
       "how many retries before we give up",
+      "What is the capital of France?",
+      "how to run the tests locally",
       "status: all systems nominal",
       "fix the typo in the readme",
     ];

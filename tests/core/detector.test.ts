@@ -23,6 +23,25 @@ describe("matchQuantitativeClaim", () => {
     expect(matchQuantitativeClaim("The build finished and the tests pass.")).toHaveLength(0);
   });
 
+  it("matches implementation-approach asks without other trigger words", () => {
+    expect(
+      matchQuantitativeClaim("What is the implementation plan for the export?")[0]?.pattern,
+    ).toBe("choice");
+    expect(matchQuantitativeClaim("how should we design the export endpoint?")[0]?.pattern).toBe(
+      "choice",
+    );
+    expect(matchQuantitativeClaim("can we document how do we weight this?")[0]?.pattern).toBe(
+      "choice",
+    );
+    expect(matchQuantitativeClaim("which plan should we adopt?")[0]?.pattern).toBe("choice");
+  });
+
+  it("stays silent on lookups and statements of desired state", () => {
+    expect(matchQuantitativeClaim("What is the capital of France?")).toHaveLength(0);
+    expect(matchQuantitativeClaim("how to run the tests locally")).toHaveLength(0);
+    expect(matchQuantitativeClaim("it should be opencode2 not opencode")).toHaveLength(0);
+  });
+
   it("reports the first match per pattern", () => {
     const matches = matchQuantitativeClaim("50% done, 80% remaining.");
     expect(matches).toHaveLength(1);

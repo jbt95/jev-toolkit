@@ -7,11 +7,18 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { attributeCalls, loadOpencodeTurns, type SessionTurn } from "@/audit/attribution.ts";
 
-const turn = (sessionID: string, startMs: number, endMs: number, askText: string): SessionTurn => ({
+const turn = (
+  sessionID: string,
+  startMs: number,
+  endMs: number,
+  askText: string,
+  markers: ReadonlyArray<string> = ["typesafe_ask"],
+): SessionTurn => ({
   sessionID,
   startMs,
   endMs,
   askText,
+  markers,
 });
 
 const resolved = (option: Option.Option<string> | undefined): string | undefined =>
@@ -67,6 +74,49 @@ describe("attributeCalls", () => {
     const [result] = attributeCalls(turns, [{ questionIDs: ["q1"], atMs: 500 }]);
     expect(resolved(result)).toBe("tight");
   });
+
+  it("attributes verify calls to the nearest turn that invoked verify", () => {
+    const turns = [
+      turn("ask-only", 800, 1200, "tools.jev.typesafe_ask({ questions: { q: {} } })", [
+        "typesafe_ask",
+      ]),
+      turn("verified", 800, 1200, "tools.jev.typesafe_verify({ claims: [] })", ["typesafe_verify"]),
+    ];
+    const [result] = attributeCalls(turns, [
+      { questionIDs: ["c0_verdict", "c1_verdict"], atMs: 1000 },
+    ]);
+    expect(resolved(result)).toBe("verified");
+  });
+
+  it("attributes review calls to the nearest turn that invoked review", () => {
+    const turns = [
+      turn("ask-only", 800, 1200, "tools.jev.typesafe_ask({ questions: { q: {} } })", [
+        "typesafe_ask",
+      ]),
+      turn("reviewed", 800, 1200, "tools.jev.typesafe_review({ task: 'x' })", ["typesafe_review"]),
+    ];
+    const [result] = attributeCalls(turns, [
+      { questionIDs: ["correctness_applicable", "correctness_score"], atMs: 1000 },
+    ]);
+    expect(resolved(result)).toBe("reviewed");
+  });
+
+  it("leaves verify and review calls unmatched without a same-tool turn", () => {
+    const turns = [turn("ask-only", 800, 1200, "typesafe_ask q")];
+    expect(attributeCalls(turns, [{ questionIDs: ["c0_verdict"], atMs: 1000 }])[0]).toEqual(
+      Option.none(),
+    );
+    expect(
+      attributeCalls(turns, [{ questionIDs: ["correctness_applicable"], atMs: 1000 }])[0],
+    ).toEqual(Option.none());
+  });
+
+  it("keeps ask-shaped ids on the id-matching path", () => {
+    const turns = [turn("s", 800, 1200, "typesafe_verify other prose", ["typesafe_verify"])];
+    expect(attributeCalls(turns, [{ questionIDs: ["export_location"], atMs: 1000 }])[0]).toEqual(
+      Option.none(),
+    );
+  });
 });
 
 describe("loadOpencodeTurns", () => {
@@ -98,6 +148,21 @@ describe("loadOpencodeTurns", () => {
       }),
     );
     insert.run(
+      "sess-verify",
+      "assistant",
+      100,
+      200,
+      JSON.stringify({
+        content: [
+          {
+            type: "tool",
+            name: "execute",
+            state: { input: { code: "return tools.jev.typesafe_verify({ claims: [] })" } },
+          },
+        ],
+      }),
+    );
+    insert.run(
       "sess-2",
       "assistant",
       100,
@@ -108,10 +173,13 @@ describe("loadOpencodeTurns", () => {
     db.close();
 
     const turns = await Effect.runPromise(loadOpencodeTurns(dbPath, "1970-01-01T00:00:00.000Z"));
-    expect(turns).toHaveLength(1);
+    expect(turns).toHaveLength(2);
     expect(turns[0]?.sessionID).toBe("sess-1");
     expect(turns[0]?.startMs).toBe(100);
     expect(turns[0]?.endMs).toBe(200);
     expect(turns[0]?.askText).toContain("q1");
+    expect(turns[0]?.markers).toEqual(["typesafe_ask"]);
+    expect(turns[1]?.sessionID).toBe("sess-verify");
+    expect(turns[1]?.markers).toEqual(["typesafe_verify"]);
   });
 });

@@ -16,9 +16,11 @@ const RECALL_PATTERNS: ReadonlyArray<RegExp> = [
   /\b(?:probability|probabilistic|likely|unlikely|chance|odds)\b/i,
   /\b(?:rank(?:ed|ing)?|prioriti[sz]e[ds]?|top \d+|best|worst|trade-?offs?)\b/i,
   /\b(?:estimate|roughly|approximately|about \d+|quantify|measure|how (?:much|many))\b/i,
-  /\b(?:should (?:we|i)|which (?:is|one|option|approach)|choose between)\b/i,
+  /\b(?:should (?:we|i)|which (?:is|one|option|approach|plan|design)|choose between)\b/i,
   /\b(?:recommend(?:ation|ed|s)?|assess(?:ment)?|evaluate|advise|suggest)\b/i,
   /\b(?:compare|contrast|weigh|decide (?:between|whether)|pick (?:one|between))\b/i,
+  /\bhow (?:should|do we)\b/i,
+  /\bwhat (?:is|should be)\b[^.?!]{0,80}\b(?:approach|plan|design|strategy|option|implement)\b/i,
   /\b(?:versus|vs)\b/i,
 ];
 

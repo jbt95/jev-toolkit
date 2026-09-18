@@ -209,7 +209,9 @@ const ASK_DESCRIPTION =
   "Primitives: choice (pick one of a defined set), noul (probability of yes), score " +
   "(probability-weighted rating across ordered levels). Call before writing any probability, " +
   "ranking, comparison, choice among alternatives, or graded estimate (severity, risk, quality, " +
-  "relevance, difficulty); report the answer with its confidence as from Jev, and treat " +
+  "relevance, difficulty); implementation approach is a choice (backend vs frontend, GET vs POST, " +
+  "streaming vs in-memory, Java-sort vs SQL-sort) and needs a call before you recommend one. " +
+  "Report the answer with its confidence as from Jev, and treat " +
   "confidence below 0.4 as no signal. Every call is logged locally.";
 
 const VERIFY_DESCRIPTION =
