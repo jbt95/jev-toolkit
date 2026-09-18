@@ -18,6 +18,32 @@ The recall patterns mirror `src/core/detector.ts` (and
 `integrations/pi/index.ts`); agreement between the copies is pinned by
 `tests/integrations/opencode-plugin.test.ts`.
 
+## Telemetry
+
+Every fire appends one JSONL line to `hook-fires.jsonl` next to the event log
+(`~/.local/share/jev/`, or `$JEV_DATA_DIR` when set):
+
+```jsonc
+{
+  "ts": "…",
+  "sessionID": "ses_…",
+  "pattern": "ranking",
+  "excerpt": "what should be the best approach…",
+  "directivePushed": true,
+}
+```
+
+Compare hook demand against actual calls to separate the two failure modes:
+
+```console
+wc -l ~/.local/share/jev/hook-fires.jsonl  # prompts the hook flagged
+jev events --harness opencode               # calls the model actually made
+```
+
+Fires without calls mean the model saw the directive and skipped it;
+no fires mean the hook never matched. Logging is best-effort and never
+throws, so telemetry can never break a model call.
+
 ## Install
 
 ```console

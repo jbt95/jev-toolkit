@@ -19,17 +19,43 @@
 // Local structural types only, so no `@opencode/plugin` install is needed
 // and the default export stays a plain object the host can call.
 
-const RECALL_PATTERNS: ReadonlyArray<RegExp> = [
-  /\b\d+(?:\.\d+)?\s?%/,
-  /\b(?:probability|probabilistic|likely|unlikely|chance|odds)\b/i,
-  /\b(?:rank(?:ed|ing)?|prioriti[sz]e[ds]?|top \d+|best|worst|trade-?offs?)\b/i,
-  /\b(?:estimate|roughly|approximately|about \d+|quantify|measure|how (?:much|many))\b/i,
-  /\b(?:should (?:we|i)|which (?:is|one|option|approach|plan|design)|choose between)\b/i,
-  /\b(?:recommend(?:ation|ed|s)?|assess(?:ment)?|evaluate|advise|suggest)\b/i,
-  /\b(?:compare|contrast|weigh|decide (?:between|whether)|pick (?:one|between))\b/i,
-  /\bhow (?:should|do we)\b/i,
-  /\bwhat (?:is|should be)\b[^.?!]{0,80}\b(?:approach|plan|design|strategy|option|implement)\b/i,
-  /\b(?:versus|vs)\b/i,
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const RECALL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: RegExp }> = [
+  { name: "percent", regex: /\b\d+(?:\.\d+)?\s?%/ },
+  { name: "probability", regex: /\b(?:probability|probabilistic|likely|unlikely|chance|odds)\b/i },
+  {
+    name: "ranking",
+    regex: /\b(?:rank(?:ed|ing)?|prioriti[sz]e[ds]?|top \d+|best|worst|trade-?offs?)\b/i,
+  },
+  {
+    name: "estimate",
+    regex: /\b(?:estimate|roughly|approximately|about \d+|quantify|measure|how (?:much|many))\b/i,
+  },
+  {
+    name: "choice",
+    regex: /\b(?:should (?:we|i)|which (?:is|one|option|approach|plan|design)|choose between)\b/i,
+  },
+  {
+    name: "choice",
+    regex: /\b(?:recommend(?:ation|ed|s)?|assess(?:ment)?|evaluate|advise|suggest)\b/i,
+  },
+  {
+    name: "choice",
+    regex: /\b(?:compare|contrast|weigh|decide (?:between|whether)|pick (?:one|between))\b/i,
+  },
+  {
+    name: "choice",
+    regex: /\bhow (?:should|do we)\b/i,
+  },
+  {
+    name: "choice",
+    regex:
+      /\bwhat (?:is|should be)\b[^.?!]{0,80}\b(?:approach|plan|design|strategy|option|implement)\b/i,
+  },
+  { name: "choice", regex: /\b(?:versus|vs)\b/i },
 ];
 
 const RECALL_DIRECTIVE =
@@ -37,9 +63,45 @@ const RECALL_DIRECTIVE =
 
 const DIRECTIVE_TAG = "[Jev policy]";
 
+/** First matching pattern name, or undefined when the text needs no routing. */
+export function recallMatch(prompt: string): string | undefined {
+  for (const { name, regex } of RECALL_PATTERNS) {
+    if (regex.test(prompt)) return name;
+  }
+  return undefined;
+}
+
 /** True when the text asks for a routed judgment (recall prefilter). */
 export function jevPromptRecall(prompt: string): boolean {
-  return RECALL_PATTERNS.some((pattern) => pattern.test(prompt));
+  return recallMatch(prompt) !== undefined;
+}
+
+interface HookFireEntry {
+  readonly ts: string;
+  readonly sessionID: string;
+  readonly pattern: string;
+  readonly excerpt: string;
+  readonly directivePushed: boolean;
+}
+
+/** Local-only telemetry path; honors JEV_DATA_DIR like the rest of the toolkit. */
+export function hookFireLogPath(): string {
+  const root = process.env.JEV_DATA_DIR ?? join(homedir(), ".local", "share", "jev");
+  return join(root, "hook-fires.jsonl");
+}
+
+/**
+ * Record one hook fire. Fail-safe by contract: telemetry must never break a
+ * model call, so every filesystem failure is swallowed after the attempt.
+ */
+export function appendHookFire(entry: HookFireEntry, path: string = hookFireLogPath()): void {
+  try {
+    mkdirSync(join(path, ".."), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {
+    // Telemetry is best-effort by design; a logging failure never fails the call.
+    return;
+  }
 }
 
 interface ContentPart {
@@ -58,6 +120,7 @@ interface SystemEntry {
 }
 
 interface SessionContextEvent {
+  readonly sessionID?: string;
   system?: Array<SystemEntry>;
   readonly messages?: ReadonlyArray<ContextMessage>;
 }
@@ -85,12 +148,26 @@ export function lastUserText(messages: ReadonlyArray<ContextMessage>): string {
   return found;
 }
 
-/** Push the directive when the latest user turn asks for a routed judgment. */
+/**
+ * Push the directive when the latest user turn asks for a routed judgment,
+ * and record the fire locally so hook demand can be compared against actual
+ * Jev calls (`~/.local/share/jev/hook-fires.jsonl` vs `events.jsonl`).
+ */
 export function handleSessionContext(event: SessionContextEvent): void {
-  if (!jevPromptRecall(lastUserText(event.messages ?? []))) return;
+  const prompt = lastUserText(event.messages ?? []);
+  const pattern = recallMatch(prompt);
+  if (pattern === undefined) return;
   const system = (event.system ??= []);
   const tagged = system.some((entry) => entry.text.includes(DIRECTIVE_TAG));
-  if (!tagged) system.push({ type: "text", text: RECALL_DIRECTIVE });
+  const directivePushed = !tagged;
+  if (directivePushed) system.push({ type: "text", text: RECALL_DIRECTIVE });
+  appendHookFire({
+    ts: new Date().toISOString(),
+    sessionID: event.sessionID ?? "",
+    pattern,
+    excerpt: prompt.slice(0, 120),
+    directivePushed,
+  });
 }
 
 export function registerJevPlugin(plugin: JevPluginContext): Promise<void> {
