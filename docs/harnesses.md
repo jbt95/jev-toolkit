@@ -10,3 +10,17 @@ One server, one contract, four tags. `command: jev`, `args: ["mcp"]` everywhere.
 | omp | `omp` | omp skill routing (mirror of `jev-routing.md`) | `before_agent_start` extension `~/.omp/agent/extensions/jev-prompt-recall` → same `integrations/pi/index.ts`, OMP vendors the Pi API (verified live: `choice` call logged with `harness=omp`) |
 
 Rules: `typesafe_ask` before any number/ordering/selection; quote verdict + confidence + "from Jev"; `<0.4` = no signal; API failure = unavailable + qualitative fallback. `typesafe_verify` for publishable claims, `typesafe_review` for change reviews. Audit: `jev audit run --harness all|opencode|claude-code|pi|omp --dry-run`.
+
+Pi direct tools: register the jev server's tools first-class with
+`"directTools": true` on its `~/.pi/agent/mcp.json` entry. Through the generic
+`mcp` proxy the tool arguments travel as an escaped JSON string — a 2026-09-18
+pi session (leadline Go support) lost 3 of 4 `typesafe_ask` attempts to
+malformed `args` payloads and only succeeded after shrinking the call. Direct
+tools take typed object arguments and skip the search/describe round trips.
+Tools register from `~/.pi/agent/mcp-cache.json`; `/mcp reconnect jev` forces a
+refresh if one is missing.
+
+Known gaps: pi/omp calls carry no harness session id (the adapter does not
+inject one), and the offline turn-matching recovery in
+`src/audit/attribution.ts` is wired for opencode only — anonymous pi calls
+cannot be linked back to a session yet.
