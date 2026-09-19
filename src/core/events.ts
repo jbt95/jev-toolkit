@@ -13,12 +13,37 @@ export class EventLogError extends Data.TaggedError("EventLogError")<{
   readonly operation: "encode" | "append" | "read";
 }> {}
 
+/** Log health as seen by one read: malformed lines are skipped, never repaired. */
+export interface EventLogStats {
+  /** Non-empty lines in the file. */
+  readonly lines: number;
+  /** Lines that decoded into events. */
+  readonly decoded: number;
+  /** Lines that failed to decode and were skipped. */
+  readonly skipped: number;
+  /** Newest event timestamp in the log, or undefined when the log is empty. */
+  readonly lastEventTs: string | undefined;
+}
+
+export interface EventLogScan {
+  readonly events: ReadonlyArray<JevEvent>;
+  readonly stats: EventLogStats;
+}
+
 export interface EventLogService {
   readonly append: (event: JevEvent) => Effect.Effect<void, EventLogError>;
   readonly read: (filter?: {
     readonly harness?: Harness;
     readonly since?: string;
   }) => Effect.Effect<ReadonlyArray<JevEvent>, EventLogError>;
+  /**
+   * Read events plus log health. `stats` describes the whole file, so a
+   * filtered scan still reports every skipped line.
+   */
+  readonly scan: (filter?: {
+    readonly harness?: Harness;
+    readonly since?: string;
+  }) => Effect.Effect<EventLogScan, EventLogError>;
 }
 
 export class EventLog extends Context.Service<EventLog, EventLogService>()("jev/EventLog") {}
@@ -42,7 +67,7 @@ export function makeEventLog(path: string): EventLogService {
       });
     });
 
-  const read = (filter: { readonly harness?: Harness; readonly since?: string } = {}) =>
+  const scan = (filter: { readonly harness?: Harness; readonly since?: string } = {}) =>
     Effect.gen(function* () {
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
@@ -53,12 +78,20 @@ export function makeEventLog(path: string): EventLogService {
         Effect.mapError(() => new EventLogError({ operation: "read" })),
       );
       const events: Array<JevEvent> = [];
+      let lines = 0;
+      let lastEventTs: string | undefined;
       for (const line of raw.split("\n")) {
         if (line.trim().length === 0) continue;
+        lines += 1;
         const parsed = decodeLine(line);
-        if (Option.isSome(parsed)) events.push(parsed.value); // malformed lines are skipped
+        // Malformed lines are skipped, never repaired; scan reports how many.
+        if (Option.isNone(parsed)) continue;
+        events.push(parsed.value);
+        if (lastEventTs === undefined || parsed.value.ts > lastEventTs) {
+          lastEventTs = parsed.value.ts;
+        }
       }
-      return events.filter(
+      const filtered = events.filter(
         (event) =>
           Option.fromUndefinedOr(filter.harness).pipe(
             Option.map((harness) => event.harness === harness),
@@ -69,9 +102,18 @@ export function makeEventLog(path: string): EventLogService {
             Option.getOrElse(() => true),
           ),
       );
+      return {
+        events: filtered,
+        stats: { lines, decoded: events.length, skipped: lines - events.length, lastEventTs },
+      };
     });
 
-  return { append, read };
+  return {
+    append,
+    scan,
+    read: (filter: { readonly harness?: Harness; readonly since?: string } = {}) =>
+      scan(filter).pipe(Effect.map((result) => result.events)),
+  };
 }
 
 export const EventLogLive = (path: string): Layer.Layer<EventLog> =>

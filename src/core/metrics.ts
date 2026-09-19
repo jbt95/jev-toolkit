@@ -1,8 +1,9 @@
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { createServer, type ServerResponse } from "node:http";
-import type { EventLogService } from "./events.ts";
+import type { EventLogService, EventLogStats } from "./events.ts";
 import type {
   CallEvent,
   JevEvent,
@@ -22,6 +23,17 @@ export interface MetricFamily {
 
 export interface MetricsSnapshot {
   readonly families: ReadonlyArray<MetricFamily>;
+}
+
+/**
+ * Process and log facts of one scrape. Without them the meter cannot say how
+ * old it is or whether the log it reads still parses, which is how a stale
+ * process and a silent schema break both stayed invisible.
+ */
+export interface MeterHealth {
+  /** Unix milliseconds when the meter process started. */
+  readonly startedAtMs: number;
+  readonly stats: EventLogStats;
 }
 
 const CONFIDENCE_BUCKETS = [0.5, 0.7, 0.8, 0.9, 0.95, 0.99, 1] as const;
@@ -214,7 +226,44 @@ const finalizeSessionLabels = (acc: EventAccumulator): void => {
   }
 };
 
-export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
+/** Health families report what the meter knows about its own input and age. */
+const healthFamilies = (health: MeterHealth): ReadonlyArray<MetricFamily> => {
+  const lastEventSeconds = Option.fromUndefinedOr(health.stats.lastEventTs).pipe(
+    Option.map((ts) => Date.parse(ts)),
+    Option.filter((ms) => Number.isFinite(ms)),
+    Option.map((ms) => Math.round(ms / 1000)),
+    Option.getOrElse(() => 0),
+  );
+  return [
+    {
+      name: "jev_log_lines_total",
+      help: "Event log lines by decode status; skipped lines are malformed and ignored.",
+      type: "counter",
+      lines: [
+        sample("jev_log_lines_total", [["status", "decoded"]], health.stats.decoded),
+        sample("jev_log_lines_total", [["status", "skipped"]], health.stats.skipped),
+      ],
+    },
+    {
+      name: "jev_last_event_timestamp_seconds",
+      help: "Unix seconds of the newest event in the log; 0 when the log is empty.",
+      type: "gauge",
+      lines: [sample("jev_last_event_timestamp_seconds", [], lastEventSeconds)],
+    },
+    {
+      name: "jev_meter_start_timestamp_seconds",
+      help:
+        "Unix seconds when the meter process started; a start older than the " +
+        "newest code change means the process serves stale code.",
+      type: "gauge",
+      lines: [
+        sample("jev_meter_start_timestamp_seconds", [], Math.round(health.startedAtMs / 1000)),
+      ],
+    },
+  ];
+};
+
+export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): MetricsSnapshot {
   const acc = newAccumulator();
   const {
     calls,
@@ -500,6 +549,8 @@ export function collect(events: ReadonlyArray<JevEvent>): MetricsSnapshot {
     },
   ];
 
+  if (health !== undefined) families.push(...healthFamilies(health));
+
   return { families };
 }
 
@@ -524,40 +575,48 @@ export function serveMeter(port: number, log: EventLogService): Effect.Effect<ne
     response.end(body);
   };
 
-  return Effect.scoped(
-    Effect.acquireRelease(
-      Effect.tryPromise({
-        try: async () => {
-          const server = createServer((request, response) => {
-            if (request.url === "/metrics") {
-              void Effect.runPromise(log.read()).then(
-                (events) => {
-                  respond(response, 200, "text/plain; version=0.0.4", render(collect(events)));
-                },
-                () => {
-                  respond(response, 500, "text/plain", "event log read failed");
-                },
-              );
-              return;
-            }
-            if (request.url === "/health") {
-              respond(response, 200, "text/plain", "ok");
-              return;
-            }
-            respond(response, 404, "text/plain", "not found");
-          });
-          await new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(port, "127.0.0.1", () => resolve());
-          });
-          return server;
-        },
-        catch: () => new MeterError(),
-      }),
-      (server) =>
-        Effect.sync(() => {
-          server.close();
+  return Effect.gen(function* () {
+    const startedAtMs = yield* Clock.currentTimeMillis;
+    return yield* Effect.scoped(
+      Effect.acquireRelease(
+        Effect.tryPromise({
+          try: async () => {
+            const server = createServer((request, response) => {
+              if (request.url === "/metrics") {
+                void Effect.runPromise(log.scan()).then(
+                  (result) => {
+                    respond(
+                      response,
+                      200,
+                      "text/plain; version=0.0.4",
+                      render(collect(result.events, { startedAtMs, stats: result.stats })),
+                    );
+                  },
+                  () => {
+                    respond(response, 500, "text/plain", "event log read failed");
+                  },
+                );
+                return;
+              }
+              if (request.url === "/health") {
+                respond(response, 200, "text/plain", "ok");
+                return;
+              }
+              respond(response, 404, "text/plain", "not found");
+            });
+            await new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(port, "127.0.0.1", () => resolve());
+            });
+            return server;
+          },
+          catch: () => new MeterError(),
         }),
-    ).pipe(Effect.flatMap(() => Effect.never)),
-  );
+        (server) =>
+          Effect.sync(() => {
+            server.close();
+          }),
+      ).pipe(Effect.flatMap(() => Effect.never)),
+    );
+  });
 }

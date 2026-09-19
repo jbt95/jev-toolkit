@@ -38,6 +38,7 @@ const waitFor = async (url: string): Promise<Response> => {
 const failingLog: EventLogService = {
   append: () => Effect.void,
   read: () => Effect.fail(new EventLogError({ operation: "read" })),
+  scan: () => Effect.fail(new EventLogError({ operation: "read" })),
 };
 
 describe("meter server", () => {

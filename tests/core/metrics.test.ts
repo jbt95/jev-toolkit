@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collect, render } from "@/core/metrics.ts";
+import { collect, render, type MeterHealth } from "@/core/metrics.ts";
 import type { JevEvent } from "@/core/schema.ts";
 
 const events: ReadonlyArray<JevEvent> = [
@@ -92,6 +92,10 @@ const events: ReadonlyArray<JevEvent> = [
 
 describe("metrics", () => {
   const body = render(collect(events));
+  const health: MeterHealth = {
+    startedAtMs: Date.parse("2026-09-17T01:00:00.000Z"),
+    stats: { lines: 10, decoded: 9, skipped: 1, lastEventTs: "2026-09-17T00:07:00.000Z" },
+  };
 
   it("counts calls and sessions per harness", () => {
     expect(body).toContain('jev_calls_total{harness="cli",status="ok"} 2');
@@ -152,10 +156,31 @@ describe("metrics", () => {
       "jev_reviews_total",
       "jev_review_score",
       "jev_review_direction_total",
+      "jev_log_lines_total",
+      "jev_last_event_timestamp_seconds",
+      "jev_meter_start_timestamp_seconds",
     ]) {
-      expect(body).toContain(`# TYPE ${name} `);
-      expect(body).toContain(`# HELP ${name} `);
+      expect(render(collect(events, health))).toContain(`# TYPE ${name} `);
+      expect(render(collect(events, health))).toContain(`# HELP ${name} `);
     }
+  });
+
+  it("reports log decode status, log freshness, and meter process age", () => {
+    const bodyWithHealth = render(collect(events, health));
+
+    expect(bodyWithHealth).toContain('jev_log_lines_total{status="decoded"} 9');
+    expect(bodyWithHealth).toContain('jev_log_lines_total{status="skipped"} 1');
+    expect(bodyWithHealth).toContain(
+      `jev_last_event_timestamp_seconds ${Math.round(Date.parse(health.stats.lastEventTs ?? "") / 1000)}`,
+    );
+    expect(bodyWithHealth).toContain(
+      `jev_meter_start_timestamp_seconds ${Math.round(health.startedAtMs / 1000)}`,
+    );
+  });
+
+  it("omits health families when no health snapshot is supplied", () => {
+    expect(body).not.toContain("jev_log_lines_total");
+    expect(body).not.toContain("jev_meter_start_timestamp_seconds");
   });
 
   it("exposes review counts, normalized scores, and directions", () => {

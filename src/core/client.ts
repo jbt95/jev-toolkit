@@ -6,7 +6,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { EventLog, type EventLogService } from "./events.ts";
-import type { Answer, AnswerMap, CallEvent, Harness, Question, QuestionMap } from "./schema.ts";
+import type {
+  Answer,
+  AnswerMap,
+  CallEvent,
+  Harness,
+  JevErrorTag,
+  Question,
+  QuestionMap,
+} from "./schema.ts";
 
 export const DEFAULT_MODEL = "jev-latest";
 const TIMEOUT = "120 seconds";
@@ -205,6 +213,8 @@ interface CallLogFields {
   readonly latencyMs: number;
   readonly model: string;
   readonly error?: string;
+  /** Typed failure kind; text descriptions change, tags do not. */
+  readonly errorTag?: JevErrorTag;
   readonly answers?: AnswerMap;
   readonly tokens?: { readonly input: number; readonly output: number };
 }
@@ -235,6 +245,7 @@ export function makeJevClient(
         status: fields.status,
         sessionID: input.sessionID,
         error: fields.error,
+        errorTag: fields.errorTag,
         answers: fields.answers,
         tokens: fields.tokens,
         questions: summarizeQuestions(input.questions),
@@ -253,6 +264,7 @@ export function makeJevClient(
           latencyMs: 0,
           model,
           error: "TYPESAFE_API_KEY is not set; export it where the harness process can see it.",
+          errorTag: "JevConfigError",
         });
         return yield* Effect.fail(new JevConfigError());
       }
@@ -273,6 +285,7 @@ export function makeJevClient(
           latencyMs,
           model,
           error: describeJevError(outcome.failure),
+          errorTag: outcome.failure._tag,
         });
         return yield* Effect.fail(outcome.failure);
       }
@@ -284,6 +297,7 @@ export function makeJevClient(
           latencyMs,
           model,
           error: "TypeSafe response did not match the expected shape",
+          errorTag: "JevDecodeError",
         });
         return yield* Effect.fail(new JevDecodeError());
       }
@@ -306,6 +320,7 @@ export function makeJevClient(
           latencyMs,
           model,
           error: "TypeSafe response did not answer the requested questions",
+          errorTag: "JevDecodeError",
         });
         return yield* Effect.fail(new JevDecodeError());
       }
