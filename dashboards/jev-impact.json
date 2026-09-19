@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "Jev/TypeSafe impact: calls, compliance against detected quantitative claims, latency, tokens, confidence. Fed by `jev meter serve` on 127.0.0.1:8788 scraped via host.containers.internal.",
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -9,7 +11,10 @@
   "refresh": "30s",
   "schemaVersion": 41,
   "tags": ["jev"],
-  "time": { "from": "now-7d", "to": "now" },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "Jev Impact",
@@ -21,10 +26,22 @@
       "type": "stat",
       "title": "Jev calls (24h)",
       "description": "Total TypeSafe/Jev calls across all harnesses in the last 24 hours.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto",
@@ -34,17 +51,34 @@
         {
           "refId": "A",
           "expr": "sum(increase(jev_calls_total[24h]))",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Compliance",
       "description": "Share of detected quantitative claims that went through Jev, over the dashboard time range.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -52,17 +86,32 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.3 },
-              { "color": "green", "value": 0.7 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
             ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto",
@@ -72,7 +121,10 @@
         {
           "refId": "A",
           "expr": "sum(increase(jev_opportunities_total{matched=\"true\"}[$__range])) / sum(increase(jev_opportunities_total[$__range]))",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -81,10 +133,22 @@
       "type": "stat",
       "title": "Errors (24h)",
       "description": "Failed Jev calls (transport, API, decode, timeout, missing key).",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto",
@@ -94,103 +158,210 @@
         {
           "refId": "A",
           "expr": "sum(increase(jev_calls_total{status=\"error\"}[24h]))",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 4,
       "type": "timeseries",
       "title": "Calls by harness",
       "description": "Jev call rate per harness.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (harness) (rate(jev_calls_total[$__rate_interval]))",
           "legendFormat": "{{harness}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "Opportunities vs calls (per day)",
       "description": "Detected quantitative claims versus actual Jev calls, daily accumulation.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum(increase(jev_opportunities_total[1d]))",
           "legendFormat": "opportunities",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         },
         {
           "refId": "B",
           "expr": "sum(increase(jev_calls_total[1d]))",
           "legendFormat": "calls",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Sessions touched by Jev (per day)",
       "description": "Distinct sessions with at least one Jev call, by harness.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (harness) (increase(jev_sessions_with_calls_total[1d]))",
           "legendFormat": "{{harness}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "Judgment latency p50 / p95",
       "description": "Jev call latency percentiles from jev_latency_seconds.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "histogram_quantile(0.5, sum by (le) (rate(jev_latency_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p50",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         },
         {
           "refId": "B",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(jev_latency_seconds_bucket[$__rate_interval])))",
           "legendFormat": "p95",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -199,38 +370,102 @@
       "type": "timeseries",
       "title": "Tokens by kind",
       "description": "TypeSafe input/output token rate.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (kind) (rate(jev_tokens_total[$__rate_interval]))",
           "legendFormat": "{{kind}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 9,
-      "type": "timeseries",
+      "type": "heatmap",
       "title": "Confidence distribution",
-      "description": "Answer confidence by primitive, bucketed.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "description": "Confidence of choice answers by bucket. A cluster below 0.4 means the model is guessing; treat those calls as no signal.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "calculate": false,
+        "calculation": {},
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Spectral",
+          "steps": 32,
+          "exponent": 0.5,
+          "fill": "#b4ff00"
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "percentunit"
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (primitive, le) (rate(jev_confidence_bucket[$__rate_interval]))",
-          "legendFormat": "{{primitive}} le={{le}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "expr": "sum by (le) (rate(jev_confidence_bucket{primitive=\"choice\"}[$__rate_interval]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -239,87 +474,197 @@
       "type": "row",
       "title": "Outcomes (session labeling)",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
       "panels": []
     },
     {
       "id": 11,
-      "type": "timeseries",
-      "title": "Sessions per day by outcome",
-      "description": "Labeled agent sessions, stacked by Jev-assessed outcome.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "type": "barchart",
+      "title": "Sessions by outcome",
+      "description": "Labeled sessions by outcome over the dashboard range. Six categories read better as bars than as a line through a step function.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
       "fieldConfig": {
         "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 60,
             "lineWidth": 1,
-            "stacking": { "mode": "normal" }
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
           }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xField": "outcome"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (outcome) (increase(jev_sessions_total[1d]))",
-          "legendFormat": "{{outcome}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "expr": "sum by (outcome) (increase(jev_sessions_total[$__range]))",
+          "legendFormat": "",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          },
+          "format": "table"
         }
       ]
     },
     {
       "id": 12,
-      "type": "timeseries",
+      "type": "barchart",
       "title": "Waste patterns",
-      "description": "Dominant waste pattern per labeled session (loops, truncation, retries, waiting on human).",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "description": "Labeled sessions by dominant waste pattern over the dashboard range; a tall loop or retries bar is the fix-worthy one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xField": "pattern"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (pattern) (increase(jev_waste_total[1d]))",
-          "legendFormat": "{{pattern}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "expr": "sum by (pattern) (increase(jev_waste_total[$__range]))",
+          "legendFormat": "",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          },
+          "format": "table"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "id": 13,
       "type": "timeseries",
       "title": "Friction distribution",
       "description": "Jev-assessed session friction, bucketed 1 (none) to 5 (severe).",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (le) (rate(jev_session_friction_bucket[$__rate_interval]))",
           "legendFormat": "{{le}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 14,
       "type": "stat",
       "title": "Jev coverage",
       "description": "Labeled sessions with at least one Jev call over all labeled sessions.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -327,17 +672,32 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.2 },
-              { "color": "green", "value": 0.5 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.2
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
             ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto",
@@ -347,7 +707,10 @@
         {
           "refId": "A",
           "expr": "sum(jev_labeled_sessions_with_calls_total) / sum(jev_labeled_sessions_total)",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -356,68 +719,155 @@
       "type": "row",
       "title": "Quality reviews (typesafe_review)",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      }
     },
     {
       "id": 16,
       "type": "timeseries",
       "title": "Review scores by dimension",
       "description": "Mean normalized score (0-1) per quality dimension from typesafe_review runs.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "avg by (dimension) (jev_review_score)",
           "legendFormat": "{{dimension}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
     },
     {
       "id": 17,
       "type": "timeseries",
       "title": "Review directions",
       "description": "Direct before/after directions from reviews that supplied a previous evaluation.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (direction) (increase(jev_review_direction_total[1d]))",
           "legendFormat": "{{direction}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "id": 18,
       "type": "row",
       "title": "Agent sessions (labeled)",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      }
     },
     {
       "id": 19,
       "type": "stat",
       "title": "Session cost (labeled)",
       "description": "Agent model cost summed over the latest label of every labeled session.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 55 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 55
+      },
       "fieldConfig": {
-        "defaults": { "unit": "currencyUSD", "decimals": 2 },
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto",
@@ -427,7 +877,10 @@
         {
           "refId": "A",
           "expr": "sum(jev_session_cost_usd)",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -436,88 +889,211 @@
       "type": "timeseries",
       "title": "Session cost by harness",
       "description": "Labeled agent cost per harness; a step means newly labeled sessions.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 55 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 55
+      },
       "fieldConfig": {
-        "defaults": { "unit": "currencyUSD" },
+        "defaults": {
+          "unit": "currencyUSD"
+        },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (harness) (jev_session_cost_usd)",
           "legendFormat": "{{harness}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Unfinished turns and tool errors",
-      "description": "Stop reasons per labeled session; length, error, and aborted mean work stopped before finishing. Tool errors are harness-reported failures.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "title": "Unfinished turns by stop reason",
+      "description": "Turn endings over all labeled sessions, by stop reason. length, error, and aborted mark work that stopped before it finished.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (increase(jev_session_stop_reasons_total[$__range]))",
+          "expr": "sum by (reason) (jev_session_stop_reasons_total)",
           "legendFormat": "{{reason}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
-        },
-        {
-          "refId": "B",
-          "expr": "sum(jev_session_tool_errors_total)",
-          "legendFormat": "tool errors (total)",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "id": 22,
       "type": "timeseries",
       "title": "Failed calls by reason",
-      "description": "Typed client failure per harness; unknown covers events written before error tags existed.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
+      "description": "Client failures over all logged calls, by typed tag; unknown covers events written before error tags existed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (increase(jev_call_errors_total[$__range]))",
+          "expr": "sum by (reason) (jev_call_errors_total)",
           "legendFormat": "{{reason}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "id": 23,
-      "type": "timeseries",
+      "type": "heatmap",
       "title": "Noul p(yes) distribution",
-      "description": "Probability distribution of noul answers, which carry no confidence field.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
+      "description": "Distribution of noul p(yes) values. Bimodal extremes mean decisive answers; a mass near 0.5 means the state is ambiguous.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "calculate": false,
+        "calculation": {},
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Spectral",
+          "steps": 32,
+          "exponent": 0.5,
+          "fill": "#b4ff00"
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "percentunit"
+        }
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (le) (rate(jev_noul_probability_bucket[$__rate_interval]))",
+          "format": "heatmap",
           "legendFormat": "{{le}}",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -526,30 +1102,56 @@
       "type": "row",
       "title": "Meter health",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 79 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      }
     },
     {
       "id": 25,
       "type": "stat",
       "title": "Log lines skipped",
       "description": "Malformed event-log lines the meter ignored. Anything above zero means part of the history is invisible.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 80 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 80
+      },
       "fieldConfig": {
         "defaults": {
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short"
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
@@ -559,7 +1161,10 @@
         {
           "refId": "A",
           "expr": "sum(jev_log_lines_total{status=\"skipped\"})",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -568,15 +1173,29 @@
       "type": "stat",
       "title": "Meter age",
       "description": "Seconds since the meter process started. Older than the last code change means it serves stale code; restart it.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 80 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 80
+      },
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
         "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto"
@@ -585,7 +1204,10 @@
         {
           "refId": "A",
           "expr": "time() - jev_meter_start_timestamp_seconds",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
         }
       ]
     },
@@ -594,14 +1216,48 @@
       "type": "stat",
       "title": "Log freshness",
       "description": "Seconds since the newest event. A growing number means nothing is writing to the log.",
-      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 80 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 80
+      },
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3600
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto",
@@ -611,7 +1267,215 @@
         {
           "refId": "A",
           "expr": "time() - jev_last_event_timestamp_seconds",
-          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Tool errors (labeled sessions)",
+      "description": "Tool results the harness flagged as errors, summed over labeled sessions. A rising line means agents fight the tools.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jev_session_tool_errors_total)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "row",
+      "title": "Compliance detail",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      }
+    },
+    {
+      "id": 32,
+      "type": "bargauge",
+      "title": "Compliance by harness",
+      "description": "Share of detected claims that went through Jev, over the dashboard range. Ranked; omp and opencode carry the claim volume.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "minVizHeight": 16,
+        "minVizWidth": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (harness) (increase(jev_opportunities_total{matched=\"true\"}[$__range])) / (sum by (harness) (increase(jev_opportunities_total[$__range])) > 0)",
+          "legendFormat": "{{harness}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "table",
+      "title": "Detections by harness",
+      "description": "The numbers behind the charts: detected claims per harness and source, split by whether a session question addressed them.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "cellOptions": {
+              "type": "auto"
+            },
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "claims"
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": ["sum"],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (harness, source, matched) (jev_opportunities_total)",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "claims"
+            }
+          }
         }
       ]
     }
