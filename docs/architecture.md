@@ -99,11 +99,16 @@ all validated by `src/core/schema.ts`:
 
 | Kind | Fields (abridged) | Written by |
 |---|---|---|
-| `call` | harness, sessionID, model, latencyMs, status, questions (id+type), answers, tokens, error? | JevClient on every ask |
-| `opportunity` | harness, sessionID, source, pattern, matched | `audit run` |
+| `call` | harness, sessionID, model, latencyMs, status, questions (id+type), answers, tokens, error?, errorTag? | JevClient on every ask |
+| `opportunity` | harness, sessionID, source, pattern, matched, messageTs? | `audit run` |
 | `triage` | harness, feature (failure/review/commit/verify), numeric summary | triage commands, `typesafe_verify` |
-| `session_label` | harness, sessionID, outcome, friction, waste, taskType | `label sessions` |
+| `session_label` | harness, sessionID, outcome, friction, waste, taskType, costUsd?, tokens?, toolErrors?, stopReasons?, parentSessionID? | `label sessions` |
 | `review` | harness, sessionID, model, dimensions (normalized score, confidence, applicable, direction?), topWeakness? | `typesafe_review` |
+
+Digest facts (cost, tokens, tool errors, stop reasons, parent session) travel
+on the label so the meter can total them per session; `messageTs` on an
+opportunity identifies one detected message, so re-auditing a window refreshes
+a claim instead of counting it twice.
 
 ```mermaid
 flowchart LR
@@ -169,6 +174,12 @@ flowchart LR
   EV --> SUM["Summary: messages · detected · matched · compliance"]
 ```
 
+Calls rarely carry a session id, so alignment first recovers the link offline
+(`src/audit/attribution.ts`): opencode turns from its message store, pi/omp
+turns from the session files, matched by question id against the assistant
+turn that issued the call. A subagent turn also credits `parentSession`, so a
+claim written in a parent session can align with questions its subagents asked.
+
 `jev audit prompts` reuses detection with the `user_prompt` subject to measure
 the live trigger: how many prompts the local regex tags versus how many Jev
 would route, with examples of both disagreements.
@@ -215,7 +226,8 @@ flowchart LR
   `[code]` before state is sent.
 - Direct callers (`jev ask`, MCP `typesafe_ask`) own their state; the client
   sends it as provided and does not redact for them.
-- Triage events store counts, not text; `session_label` stores enum labels.
+- Triage events store counts, not text; `session_label` stores enum labels plus
+  numeric digest facts (cost, tokens, tool errors, stop-reason counts).
 - Tests are offline: fake transports, temp dirs, `127.0.0.1` only, no module
   mocking.
 

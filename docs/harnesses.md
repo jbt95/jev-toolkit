@@ -21,6 +21,11 @@ Tools register from `~/.pi/agent/mcp-cache.json`; `/mcp reconnect jev` forces a
 refresh if one is missing.
 
 Known gaps: pi/omp calls carry no harness session id (the adapter does not
-inject one), and the offline turn-matching recovery in
-`src/audit/attribution.ts` is wired for opencode only — anonymous pi calls
-cannot be linked back to a session yet.
+inject one). `src/audit/attribution.ts` recovers the link offline instead: it
+reads the assistant turn that issued the call from the session files
+(`loadPiOmpTurns`) and matches the call's question ids against it, crediting
+both the issuing session and, when the session records `parentSession`, the
+parent it was spawned from. Verified against the live log: 24 of 33 omp calls
+resolve to their session; the rest are `jev triage` runs that inherited
+`JEV_HARNESS=omp` from the shell and have no transcript turn to match.
+

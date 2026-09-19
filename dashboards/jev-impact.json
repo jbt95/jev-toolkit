@@ -42,7 +42,7 @@
       "id": 2,
       "type": "stat",
       "title": "Compliance",
-      "description": "Share of detected quantitative claims that went through Jev.",
+      "description": "Share of detected quantitative claims that went through Jev, over the dashboard time range.",
       "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
       "fieldConfig": {
@@ -71,7 +71,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(jev_opportunities_total{matched=\"true\"}) / sum(jev_opportunities_total)",
+          "expr": "sum(increase(jev_opportunities_total{matched=\"true\"}[$__range])) / sum(increase(jev_opportunities_total[$__range]))",
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]
@@ -394,6 +394,223 @@
           "refId": "A",
           "expr": "sum by (direction) (increase(jev_review_direction_total[1d]))",
           "legendFormat": "{{direction}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Agent sessions (labeled)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Session cost (labeled)",
+      "description": "Agent model cost summed over the latest label of every labeled session.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 55 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 2 },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jev_session_cost_usd)",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Session cost by harness",
+      "description": "Labeled agent cost per harness; a step means newly labeled sessions.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 55 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD" },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (harness) (jev_session_cost_usd)",
+          "legendFormat": "{{harness}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Unfinished turns and tool errors",
+      "description": "Stop reasons per labeled session; length, error, and aborted mean work stopped before finishing. Tool errors are harness-reported failures.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 63 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (increase(jev_session_stop_reasons_total[$__range]))",
+          "legendFormat": "{{reason}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(jev_session_tool_errors_total)",
+          "legendFormat": "tool errors (total)",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Failed calls by reason",
+      "description": "Typed client failure per harness; unknown covers events written before error tags existed.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 63 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (increase(jev_call_errors_total[$__range]))",
+          "legendFormat": "{{reason}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Noul p(yes) distribution",
+      "description": "Probability distribution of noul answers, which carry no confidence field.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (le) (rate(jev_noul_probability_bucket[$__rate_interval]))",
+          "legendFormat": "{{le}}",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Meter health",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 79 }
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Log lines skipped",
+      "description": "Malformed event-log lines the meter ignored. Anything above zero means part of the history is invisible.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 80 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jev_log_lines_total{status=\"skipped\"})",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "stat",
+      "title": "Meter age",
+      "description": "Seconds since the meter process started. Older than the last code change means it serves stale code; restart it.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 80 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - jev_meter_start_timestamp_seconds",
+          "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "stat",
+      "title": "Log freshness",
+      "description": "Seconds since the newest event. A growing number means nothing is writing to the log.",
+      "datasource": { "type": "prometheus", "uid": "claude-code-prom" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 80 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - jev_last_event_timestamp_seconds",
           "datasource": { "type": "prometheus", "uid": "claude-code-prom" }
         }
       ]

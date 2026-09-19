@@ -12,16 +12,38 @@ if [ -z "${TYPESAFE_API_KEY:-}" ] && [ -f "$HOME/.config/jev/env" ]; then
   # shellcheck disable=SC1091
   . "$HOME/.config/jev/env"
 fi
+if [ -z "${TYPESAFE_API_KEY:-}" ] && command -v zsh >/dev/null 2>&1; then
+  # launchd starts with a bare environment; ask the user's own shell, whose rc
+  # files already hold the key. Nothing is written by this repo.
+  key=$(zsh -ic 'printf %s "${TYPESAFE_API_KEY:-}"' 2>/dev/null || true)
+  if [ -n "$key" ]; then
+    TYPESAFE_API_KEY=$key
+    export TYPESAFE_API_KEY
+  fi
+fi
 if [ -z "${TYPESAFE_API_KEY:-}" ]; then
   log "TYPESAFE_API_KEY not set for launchd; skipping label and audit"
   exit 0
 fi
 
+# launchd's PATH omits Homebrew; resolve node before running the CLI.
+node_bin=${JEV_NODE:-}
+if [ -z "$node_bin" ]; then
+  node_bin=$(command -v node || true)
+fi
+if [ -z "$node_bin" ] && [ -x /opt/homebrew/bin/node ]; then
+  node_bin=/opt/homebrew/bin/node
+fi
+if [ -z "$node_bin" ]; then
+  log "node not found; cannot run label or audit"
+  exit 1
+fi
+
 log "label sessions --since 24h --limit 50"
-node "$repo/src/cli/jev.ts" label sessions --since 24h --limit 50 || log "label failed"
+"$node_bin" "$repo/src/cli/jev.ts" label sessions --since 24h --limit 50 || log "label failed"
 
 log "audit run --since 24h"
-node "$repo/src/cli/jev.ts" audit run --since 24h || log "audit failed"
+"$node_bin" "$repo/src/cli/jev.ts" audit run --since 24h || log "audit failed"
 
 if "$repo/scripts/check-metrics.sh" >/dev/null 2>&1; then
   log "metrics check passed"

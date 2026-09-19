@@ -112,8 +112,8 @@ src/audit/          message extractors (opencode DB, claude projects, pi/omp log
 src/replay/         review-fixture capture/score measurement aid
 tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
-launchd/            always-on meter plist
-scripts/            install.sh · install-dashboard.sh · check-metrics.sh
+launchd/            always-on meter + nightly label/audit plists
+scripts/            install.sh · install-dashboard.sh · check-metrics.sh · nightly.sh
 tools/oxlint/       vendored anti-slop rule groups
 docs/               this documentation set
 ```
