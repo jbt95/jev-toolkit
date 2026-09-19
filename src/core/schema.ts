@@ -132,12 +132,27 @@ export const ReviewEvent = Schema.TaggedStruct("review", {
 });
 export type ReviewEvent = Schema.Schema.Type<typeof ReviewEvent>;
 
+/** Model token usage summed over one session. */
+export const SessionTokens = Schema.Struct({
+  input: Schema.Number,
+  output: Schema.Number,
+  cacheRead: Schema.Number,
+  cacheWrite: Schema.Number,
+});
+export type SessionTokens = Schema.Schema.Type<typeof SessionTokens>;
+
 export const SessionLabelEvent = Schema.TaggedStruct("session_label", {
   ...BaseEvent,
   outcome: Schema.Literals(["shipped", "blocked", "abandoned", "ongoing"]),
   friction: Schema.Number,
   waste: Schema.Literals(["none", "loop", "truncation", "retries", "waiting_on_human"]),
   taskType: Schema.String,
+  // Digest facts travel with the label so the meter can total them per session.
+  costUsd: Schema.optional(Schema.Number),
+  tokens: Schema.optional(SessionTokens),
+  toolErrors: Schema.optional(Schema.Number),
+  stopReasons: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  parentSessionID: Schema.optional(Schema.String),
 });
 export type SessionLabelEvent = Schema.Schema.Type<typeof SessionLabelEvent>;
 

@@ -15,10 +15,16 @@ const TASK_TYPES = {
 export function labelQuestions(digests: ReadonlyArray<SessionDigest>): QuestionMap {
   const questions: Record<string, Question> = {};
   digests.forEach((digest, index) => {
+    const parts = [
+      `Session ${index + 1} (${digest.harness}): ${digest.assistantTurns} assistant turns`,
+      `tools ${JSON.stringify(digest.toolCounts)}`,
+      `tool errors ${digest.errorCount}`,
+      `turn endings ${JSON.stringify(digest.stopReasons ?? {})}`,
+    ];
+    if (digest.costUsd !== undefined) parts.push(`cost $${digest.costUsd.toFixed(2)}`);
     const label =
-      `Session ${index + 1} (${digest.harness}): ${digest.assistantTurns} assistant turns, ` +
-      `tools ${JSON.stringify(digest.toolCounts)}, errors ${digest.errorCount}; ` +
-      `the developer asked: ${digest.userPrompts.join(" | ") || "(no captured prompts)"}`;
+      `${parts.join("; ")}; the developer asked: ` +
+      `${digest.userPrompts.join(" | ") || "(no captured prompts)"}`;
     questions[`s${index}_outcome`] = {
       _tag: "choice",
       instructions: `What was the outcome of this session? ${label}`,

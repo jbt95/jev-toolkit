@@ -37,7 +37,36 @@ const events: ReadonlyArray<JevEvent> = [
     latencyMs: 30,
     status: "error",
     error: "JevApiError",
+    errorTag: "JevApiError",
     questions: [{ id: "q3", type: "noul" }],
+  },
+  {
+    _tag: "call",
+    ts: "2026-09-17T00:02:30.000Z",
+    harness: "cli",
+    model: "jev-1.13.0",
+    latencyMs: 40,
+    status: "error",
+    error: "TYPESAFE_API_KEY is not set",
+    errorTag: "JevConfigError",
+    questions: [{ id: "q4", type: "noul" }],
+  },
+  {
+    _tag: "call",
+    ts: "2026-09-17T00:02:45.000Z",
+    harness: "cli",
+    model: "jev-1.13.0",
+    latencyMs: 60,
+    status: "ok",
+    questions: [
+      { id: "q5", type: "noul" },
+      { id: "q6", type: "noul" },
+    ],
+    answers: {
+      q5: { _tag: "noul", noul: 0.99 },
+      q6: { _tag: "noul", noul: 0.2 },
+    },
+    tokens: { input: 30, output: 3 },
   },
   {
     _tag: "opportunity",
@@ -87,6 +116,10 @@ const events: ReadonlyArray<JevEvent> = [
     friction: 2,
     waste: "none",
     taskType: "feature",
+    costUsd: 0.5,
+    tokens: { input: 1000, output: 200, cacheRead: 5000, cacheWrite: 0 },
+    toolErrors: 2,
+    stopReasons: { toolUse: 3, length: 1 },
   },
 ];
 
@@ -98,9 +131,14 @@ describe("metrics", () => {
   };
 
   it("counts calls and sessions per harness", () => {
-    expect(body).toContain('jev_calls_total{harness="cli",status="ok"} 2');
-    expect(body).toContain('jev_calls_total{harness="cli",status="error"} 1');
+    expect(body).toContain('jev_calls_total{harness="cli",status="ok"} 3');
+    expect(body).toContain('jev_calls_total{harness="cli",status="error"} 2');
     expect(body).toContain('jev_sessions_with_calls_total{harness="cli"} 2');
+  });
+
+  it("counts failed calls by typed error tag", () => {
+    expect(body).toContain('jev_call_errors_total{harness="cli",reason="JevApiError"} 1');
+    expect(body).toContain('jev_call_errors_total{harness="cli",reason="JevConfigError"} 1');
   });
 
   it("counts labeled sessions that also made calls", () => {
@@ -117,8 +155,8 @@ describe("metrics", () => {
   });
 
   it("sums tokens and counts triage runs", () => {
-    expect(body).toContain('jev_tokens_total{harness="cli",kind="input"} 150');
-    expect(body).toContain('jev_tokens_total{harness="cli",kind="output"} 15');
+    expect(body).toContain('jev_tokens_total{harness="cli",kind="input"} 180');
+    expect(body).toContain('jev_tokens_total{harness="cli",kind="output"} 18');
     expect(body).toContain('jev_triage_total{feature="failure"} 1');
   });
 
@@ -127,8 +165,15 @@ describe("metrics", () => {
     expect(body).toContain('jev_confidence_sum{primitive="choice"} 0.99');
     expect(body).toContain('jev_confidence_count{primitive="choice"} 1');
     expect(body).toContain('jev_confidence_count{primitive="score"} 1');
-    expect(body).toContain('jev_latency_seconds_count{harness="cli"} 3');
-    expect(body).toContain('jev_latency_seconds_bucket{harness="cli",le="+Inf"} 3');
+    expect(body).toContain('jev_latency_seconds_count{harness="cli"} 5');
+    expect(body).toContain('jev_latency_seconds_bucket{harness="cli",le="+Inf"} 5');
+  });
+
+  it("exposes noul probabilities, which carry no confidence field", () => {
+    expect(body).toContain('jev_noul_probability_count{harness="cli"} 2');
+    expect(body).toContain('jev_noul_probability_bucket{harness="cli",le="0.3"} 1');
+    expect(body).toContain('jev_noul_probability_bucket{harness="cli",le="0.99"} 2');
+    expect(body).not.toContain('jev_confidence_count{primitive="noul"}');
   });
 
   it("aggregates session labels into outcome, waste, and friction series", () => {
@@ -136,6 +181,15 @@ describe("metrics", () => {
     expect(body).toContain('jev_waste_total{harness="cli",pattern="none"} 1');
     expect(body).toContain('jev_session_friction_count{harness="cli"} 1');
     expect(body).toContain('jev_session_friction_bucket{harness="cli",le="+Inf"} 1');
+  });
+
+  it("totals digest facts carried by session labels", () => {
+    expect(body).toContain('jev_session_cost_usd{harness="cli"} 0.5');
+    expect(body).toContain('jev_session_tokens_total{harness="cli",kind="input"} 1000');
+    expect(body).toContain('jev_session_tokens_total{harness="cli",kind="cache_read"} 5000');
+    expect(body).toContain('jev_session_tool_errors_total{harness="cli"} 2');
+    expect(body).toContain('jev_session_stop_reasons_total{harness="cli",reason="toolUse"} 3');
+    expect(body).toContain('jev_session_stop_reasons_total{harness="cli",reason="length"} 1');
   });
 
   it("declares every family with HELP and TYPE", () => {
@@ -156,6 +210,12 @@ describe("metrics", () => {
       "jev_reviews_total",
       "jev_review_score",
       "jev_review_direction_total",
+      "jev_noul_probability",
+      "jev_call_errors_total",
+      "jev_session_cost_usd",
+      "jev_session_tokens_total",
+      "jev_session_tool_errors_total",
+      "jev_session_stop_reasons_total",
       "jev_log_lines_total",
       "jev_last_event_timestamp_seconds",
       "jev_meter_start_timestamp_seconds",

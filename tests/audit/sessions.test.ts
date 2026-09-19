@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { digestClaude, digestOpencode, digestPiOmp } from "@/audit/sessions.ts";
 
@@ -33,6 +33,73 @@ describe("session digests", () => {
     expect(digest?.sessionID).toBe("pi-session-1");
     expect(digest?.userPrompts).toEqual(["which option is better?"]);
     expect(digest?.assistantTurns).toBe(1);
+  });
+
+  it("digests pi/omp usage, cost, tool errors, stop reasons, and parent session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-sessions-omp-"));
+    const file = join(root, "-proj", "2026-09-19T09-00-00-000Z_child-file.jsonl");
+    await mkdir(dirname(file), { recursive: true });
+    const lines: ReadonlyArray<unknown> = [
+      {
+        type: "session",
+        version: 3,
+        id: "omp-child",
+        timestamp: "2026-09-19T09:00:00.000Z",
+        parentSession: "/sessions/-proj/2026-09-19T08-00-00-000Z_parent-session.jsonl",
+      },
+      {
+        type: "message",
+        id: "m1",
+        timestamp: "2026-09-19T09:01:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "ship it" }] },
+      },
+      {
+        type: "message",
+        id: "m2",
+        timestamp: "2026-09-19T09:02:00.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }],
+          usage: {
+            input: 100,
+            output: 20,
+            cacheRead: 300,
+            cacheWrite: 0,
+            cost: { total: 0.5 },
+          },
+          stopReason: "toolUse",
+        },
+      },
+      {
+        type: "message",
+        id: "m3",
+        timestamp: "2026-09-19T09:03:00.000Z",
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          isError: true,
+          content: [{ type: "text", text: "command failed" }],
+        },
+      },
+      {
+        type: "message",
+        id: "m4",
+        timestamp: "2026-09-19T09:04:00.000Z",
+        message: { role: "assistant", content: [], stopReason: "length" },
+      },
+    ];
+    await writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+
+    const digests = await Effect.runPromise(digestPiOmp([{ harness: "omp", root }], since));
+
+    expect(digests).toHaveLength(1);
+    const digest = digests[0];
+    expect(digest?.sessionID).toBe("omp-child");
+    expect(digest?.parentSessionID).toBe("parent-session");
+    expect(digest?.tokens).toEqual({ input: 100, output: 20, cacheRead: 300, cacheWrite: 0 });
+    expect(digest?.costUsd).toBe(0.5);
+    expect(digest?.errorCount).toBe(1);
+    expect(digest?.stopReasons).toEqual({ toolUse: 1, length: 1 });
   });
 
   it("digests OpenCode sessions from the database", async () => {

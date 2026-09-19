@@ -8,7 +8,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isNotFoundError } from "../core/fs-errors.ts";
-import { Harness } from "../core/schema.ts";
+import { Harness, SessionTokens } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export class SessionAuditError extends Data.TaggedError("SessionAuditError")<{
@@ -22,8 +22,15 @@ export const SessionDigest = Schema.Struct({
   userPrompts: Schema.Array(Schema.String),
   assistantTurns: Schema.Number,
   toolCounts: Schema.Record(Schema.String, Schema.Number),
+  /** Tool results the harness flagged as errors. */
   errorCount: Schema.Number,
+  /** Summed model usage across the session; absent when the harness reports none. */
+  tokens: Schema.optional(SessionTokens),
+  /** Turn endings by stop reason; `length`/`error`/`aborted` surface truncation. */
+  stopReasons: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
   costUsd: Schema.optional(Schema.Number),
+  /** Subagent sessions record the session that spawned them. */
+  parentSessionID: Schema.optional(Schema.String),
 });
 export type SessionDigest = Schema.Schema.Type<typeof SessionDigest>;
 
@@ -41,6 +48,12 @@ interface DigestDraft {
   toolCounts: Record<string, number>;
   assistantTurns: number;
   errorCount: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** True once the harness reported model usage for any turn. */
+  usageSeen: boolean;
+  costUsd: number;
+  stopReasons: Record<string, number>;
+  parentSessionID: string;
   startedAt: string;
 }
 
@@ -49,6 +62,11 @@ const newDraft = (): DigestDraft => ({
   toolCounts: {},
   assistantTurns: 0,
   errorCount: 0,
+  tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  usageSeen: false,
+  costUsd: 0,
+  stopReasons: {},
+  parentSessionID: "",
   startedAt: "",
 });
 
@@ -76,7 +94,10 @@ const draftDigest = (
   costUsd?: number,
 ): Option.Option<SessionDigest> => {
   if (draft.assistantTurns === 0 && draft.userPrompts.length === 0) return Option.none();
-  const base: SessionDigest = {
+  // A session-row cost (opencode) beats summed per-turn cost when both exist.
+  const summedCost = draft.usageSeen ? draft.costUsd : undefined;
+  const totalCost = costUsd === undefined || costUsd === 0 ? summedCost : costUsd;
+  return Option.some({
     harness,
     sessionID,
     startedAt: draft.startedAt,
@@ -84,15 +105,11 @@ const draftDigest = (
     assistantTurns: draft.assistantTurns,
     toolCounts: draft.toolCounts,
     errorCount: draft.errorCount,
-  };
-  return Option.some(
-    Option.fromUndefinedOr(costUsd).pipe(
-      Option.match({
-        onNone: () => base,
-        onSome: (cost) => ({ ...base, costUsd: cost }),
-      }),
-    ),
-  );
+    tokens: draft.usageSeen ? { ...draft.tokens } : undefined,
+    stopReasons: Object.keys(draft.stopReasons).length > 0 ? draft.stopReasons : undefined,
+    costUsd: totalCost,
+    parentSessionID: draft.parentSessionID === "" ? undefined : draft.parentSessionID,
+  });
 };
 
 const ContentItem = Schema.Struct({
@@ -290,15 +307,53 @@ const PiEntry = Schema.Struct({
   type: Schema.String,
   id: Schema.optional(Schema.String),
   timestamp: Schema.optional(Schema.String),
+  parentSession: Schema.optional(Schema.String),
   message: Schema.optional(
     Schema.Struct({
       role: Schema.optional(Schema.String),
       content: Schema.Array(ContentItem),
+      isError: Schema.optional(Schema.Boolean),
+      stopReason: Schema.optional(Schema.String),
+      usage: Schema.optional(
+        Schema.Struct({
+          input: Schema.Number,
+          output: Schema.Number,
+          cacheRead: Schema.Number,
+          cacheWrite: Schema.Number,
+          cost: Schema.optional(Schema.Struct({ total: Schema.Number })),
+        }),
+      ),
     }),
   ),
 });
 type PiEntry = Schema.Schema.Type<typeof PiEntry>;
 const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
+
+/** Session files are named `<timestamp>_<session id>.jsonl`; keep the id. */
+const sessionIDFromFile = (path: string): string => {
+  const base = basename(path, ".jsonl");
+  const separator = base.indexOf("_");
+  return separator < 0 ? base : base.slice(separator + 1);
+};
+
+/** Sum one assistant turn's model usage into the draft. */
+const accumulateUsage = (
+  draft: DigestDraft,
+  usage: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly cost?: { readonly total: number } | undefined;
+  },
+): void => {
+  draft.usageSeen = true;
+  draft.tokens.input += usage.input;
+  draft.tokens.output += usage.output;
+  draft.tokens.cacheRead += usage.cacheRead;
+  draft.tokens.cacheWrite += usage.cacheWrite;
+  draft.costUsd += usage.cost?.total ?? 0;
+};
 
 const accumulatePi = (draft: DigestDraft, entry: PiEntry, sinceIso: string): void => {
   recordStartedAt(draft, entry.timestamp);
@@ -311,6 +366,16 @@ const accumulatePi = (draft: DigestDraft, entry: PiEntry, sinceIso: string): voi
     for (const item of message.value.content) {
       if (item.is_error === true) draft.errorCount += 1;
     }
+    const usage = Option.fromUndefinedOr(message.value.usage);
+    if (Option.isSome(usage)) accumulateUsage(draft, usage.value);
+    const stopReason = Option.fromUndefinedOr(message.value.stopReason);
+    if (Option.isSome(stopReason)) {
+      draft.stopReasons[stopReason.value] = (draft.stopReasons[stopReason.value] ?? 0) + 1;
+    }
+    return;
+  }
+  if (message.value.role === "toolResult") {
+    if (message.value.isError === true) draft.errorCount += 1;
     return;
   }
   if (message.value.role !== "user") return;
@@ -331,7 +396,11 @@ const digestPiOmpText = (
     if (Option.isNone(decoded)) continue;
     const entry = decoded.value;
     const session = Option.fromUndefinedOr(entry.id);
-    if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
+    if (entry.type === "session") {
+      if (Option.isSome(session)) sessionID = session.value;
+      const parent = Option.fromUndefinedOr(entry.parentSession);
+      if (Option.isSome(parent)) draft.parentSessionID = sessionIDFromFile(parent.value);
+    }
     accumulatePi(draft, entry, sinceIso);
   }
   return draftDigest(harness, sessionID, draft);

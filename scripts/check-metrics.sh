@@ -28,6 +28,12 @@ for metric in \
   jev_sessions_total \
   jev_waste_total \
   jev_session_friction \
+  jev_noul_probability \
+  jev_call_errors_total \
+  jev_session_cost_usd \
+  jev_session_tokens_total \
+  jev_session_tool_errors_total \
+  jev_session_stop_reasons_total \
   jev_reviews_total \
   jev_review_score \
   jev_review_direction_total \

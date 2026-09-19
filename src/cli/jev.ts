@@ -914,6 +914,11 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
             friction: scoreOrZero(frictionAnswer),
             waste: pickWaste(wasteAnswer),
             taskType: taskAnswer,
+            costUsd: digest.value.costUsd,
+            tokens: digest.value.tokens,
+            toolErrors: digest.value.errorCount,
+            stopReasons: digest.value.stopReasons,
+            parentSessionID: digest.value.parentSessionID,
           })
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
         labeled += 1;

@@ -37,6 +37,7 @@ export interface MeterHealth {
 }
 
 const CONFIDENCE_BUCKETS = [0.5, 0.7, 0.8, 0.9, 0.95, 0.99, 1] as const;
+const NOUL_BUCKETS = [0.1, 0.3, 0.5, 0.7, 0.9, 0.99] as const;
 const LATENCY_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10] as const;
 const FRICTION_BUCKETS = [1, 2, 3, 4, 5] as const;
 
@@ -100,6 +101,7 @@ const splitKey = (key: string): readonly [string, string] => {
 /** One accumulator per event kind; collect() only dispatches and finalizes. */
 interface EventAccumulator {
   readonly calls: Map<string, { ok: number; error: number }>;
+  readonly callErrors: Map<string, number>;
   readonly tokens: Map<string, { input: number; output: number }>;
   readonly opportunities: Map<string, { matched: number; missed: number }>;
   readonly sessions: Map<string, Set<string>>;
@@ -107,9 +109,14 @@ interface EventAccumulator {
   readonly triage: Map<string, number>;
   readonly latency: Map<string, Histogram>;
   readonly confidence: Map<string, Histogram>;
+  readonly noulProbability: Map<string, Histogram>;
   readonly sessionOutcomes: Map<string, number>;
   readonly sessionWaste: Map<string, number>;
   readonly sessionFriction: Map<string, Histogram>;
+  readonly sessionCost: Map<string, number>;
+  readonly sessionTokens: Map<string, number>;
+  readonly sessionToolErrors: Map<string, number>;
+  readonly sessionStopReasons: Map<string, number>;
   readonly reviews: Map<string, number>;
   readonly reviewScores: Map<string, { sum: number; count: number }>;
   readonly reviewDirections: Map<string, number>;
@@ -119,6 +126,7 @@ interface EventAccumulator {
 
 const newAccumulator = (): EventAccumulator => ({
   calls: new Map(),
+  callErrors: new Map(),
   tokens: new Map(),
   opportunities: new Map(),
   sessions: new Map(),
@@ -126,9 +134,14 @@ const newAccumulator = (): EventAccumulator => ({
   triage: new Map(),
   latency: new Map(),
   confidence: new Map(),
+  noulProbability: new Map(),
   sessionOutcomes: new Map(),
   sessionWaste: new Map(),
   sessionFriction: new Map(),
+  sessionCost: new Map(),
+  sessionTokens: new Map(),
+  sessionToolErrors: new Map(),
+  sessionStopReasons: new Map(),
   reviews: new Map(),
   reviewScores: new Map(),
   reviewDirections: new Map(),
@@ -139,7 +152,11 @@ const newAccumulator = (): EventAccumulator => ({
 const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
   const entry = acc.calls.get(event.harness) ?? { ok: 0, error: 0 };
   if (event.status === "ok") entry.ok += 1;
-  else entry.error += 1;
+  else {
+    entry.error += 1;
+    const reasonKey = `${event.harness}|${event.errorTag ?? "unknown"}`;
+    acc.callErrors.set(reasonKey, (acc.callErrors.get(reasonKey) ?? 0) + 1);
+  }
   acc.calls.set(event.harness, entry);
 
   const eventTokens = Option.fromUndefinedOr(event.tokens);
@@ -164,7 +181,13 @@ const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
   const eventAnswers = Option.fromUndefinedOr(event.answers);
   if (Option.isSome(eventAnswers)) {
     for (const answer of Object.values(eventAnswers.value)) {
-      if (answer._tag === "noul") continue;
+      if (answer._tag === "noul") {
+        // A noul answer has no confidence field; its probability is the signal.
+        const noulHistogram = acc.noulProbability.get(event.harness) ?? newHistogram(NOUL_BUCKETS);
+        observe(noulHistogram, NOUL_BUCKETS, answer.noul);
+        acc.noulProbability.set(event.harness, noulHistogram);
+        continue;
+      }
       const histogram = acc.confidence.get(answer._tag) ?? newHistogram(CONFIDENCE_BUCKETS);
       observe(histogram, CONFIDENCE_BUCKETS, answer.confidence);
       acc.confidence.set(answer._tag, histogram);
@@ -211,6 +234,41 @@ const collectSessionLabel = (acc: EventAccumulator, event: SessionLabelEvent): v
   }
 };
 
+/** Digest facts carried by a label: cost, tokens, tool errors, stop reasons. */
+const accumulateSessionFacts = (acc: EventAccumulator, label: SessionLabelEvent): void => {
+  const cost = Option.fromUndefinedOr(label.costUsd);
+  if (Option.isSome(cost)) {
+    acc.sessionCost.set(label.harness, (acc.sessionCost.get(label.harness) ?? 0) + cost.value);
+  }
+  const tokens = Option.fromUndefinedOr(label.tokens);
+  if (Option.isSome(tokens)) {
+    const byKind = [
+      ["input", tokens.value.input],
+      ["output", tokens.value.output],
+      ["cache_read", tokens.value.cacheRead],
+      ["cache_write", tokens.value.cacheWrite],
+    ] as const;
+    for (const [kind, value] of byKind) {
+      const tokenKey = `${label.harness}|${kind}`;
+      acc.sessionTokens.set(tokenKey, (acc.sessionTokens.get(tokenKey) ?? 0) + value);
+    }
+  }
+  const toolErrors = Option.fromUndefinedOr(label.toolErrors);
+  if (Option.isSome(toolErrors)) {
+    acc.sessionToolErrors.set(
+      label.harness,
+      (acc.sessionToolErrors.get(label.harness) ?? 0) + toolErrors.value,
+    );
+  }
+  const stopReasons = Option.fromUndefinedOr(label.stopReasons);
+  if (Option.isSome(stopReasons)) {
+    for (const [reason, count] of Object.entries(stopReasons.value)) {
+      const reasonKey = `${label.harness}|${reason}`;
+      acc.sessionStopReasons.set(reasonKey, (acc.sessionStopReasons.get(reasonKey) ?? 0) + count);
+    }
+  }
+};
+
 /** One observation per labeled session (latest label wins); labels without a
  * session ID cannot be deduped and stay per-event. */
 const finalizeSessionLabels = (acc: EventAccumulator): void => {
@@ -223,6 +281,7 @@ const finalizeSessionLabels = (acc: EventAccumulator): void => {
       acc.sessionFriction.get(label.harness) ?? newHistogram(FRICTION_BUCKETS);
     observe(frictionHistogram, FRICTION_BUCKETS, label.friction);
     acc.sessionFriction.set(label.harness, frictionHistogram);
+    accumulateSessionFacts(acc, label);
   }
 };
 
@@ -266,20 +325,26 @@ const healthFamilies = (health: MeterHealth): ReadonlyArray<MetricFamily> => {
 export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): MetricsSnapshot {
   const acc = newAccumulator();
   const {
+    callErrors,
     calls,
-    tokens,
-    opportunities,
-    sessions,
-    labeledSessions,
-    triage,
-    latency,
     confidence,
-    sessionOutcomes,
-    sessionWaste,
-    sessionFriction,
+    labeledSessions,
+    latency,
+    noulProbability,
+    opportunities,
     reviews,
-    reviewScores,
     reviewDirections,
+    reviewScores,
+    sessionCost,
+    sessionFriction,
+    sessionOutcomes,
+    sessionStopReasons,
+    sessionTokens,
+    sessionToolErrors,
+    sessionWaste,
+    sessions,
+    tokens,
+    triage,
   } = acc;
 
   for (const event of events) {
@@ -462,6 +527,36 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
       ),
     },
     {
+      name: "jev_noul_probability",
+      help: "Noul p(yes) distribution by harness; noul answers carry no confidence.",
+      type: "histogram",
+      lines: sorted(noulProbability).flatMap(([harness, histogram]) =>
+        histogramLines(
+          "jev_noul_probability",
+          "le",
+          [["harness", harness]],
+          NOUL_BUCKETS,
+          histogram,
+        ),
+      ),
+    },
+    {
+      name: "jev_call_errors_total",
+      help: "Failed calls by harness and typed failure tag; unknown covers pre-tag events.",
+      type: "counter",
+      lines: sorted(callErrors).map(([key, count]) => {
+        const [harness = "", reason = ""] = key.split("|");
+        return sample(
+          "jev_call_errors_total",
+          [
+            ["harness", harness],
+            ["reason", reason],
+          ],
+          count,
+        );
+      }),
+    },
+    {
       name: "jev_sessions_total",
       help: "Labeled sessions by harness and outcome.",
       type: "counter",
@@ -506,6 +601,54 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
           histogram,
         ),
       ),
+    },
+    {
+      name: "jev_session_cost_usd",
+      help: "Summed agent session cost in USD by harness, from the latest label per session.",
+      type: "gauge",
+      lines: sorted(sessionCost).map(([harness, total]) =>
+        sample("jev_session_cost_usd", [["harness", harness]], round(total)),
+      ),
+    },
+    {
+      name: "jev_session_tokens_total",
+      help: "Agent model tokens summed over labeled sessions by harness and kind.",
+      type: "counter",
+      lines: sorted(sessionTokens).map(([key, total]) => {
+        const [harness = "", kind = ""] = key.split("|");
+        return sample(
+          "jev_session_tokens_total",
+          [
+            ["harness", harness],
+            ["kind", kind],
+          ],
+          total,
+        );
+      }),
+    },
+    {
+      name: "jev_session_tool_errors_total",
+      help: "Tool errors reported by the harness, summed over labeled sessions.",
+      type: "counter",
+      lines: sorted(sessionToolErrors).map(([harness, total]) =>
+        sample("jev_session_tool_errors_total", [["harness", harness]], total),
+      ),
+    },
+    {
+      name: "jev_session_stop_reasons_total",
+      help: "Turn endings by stop reason over labeled sessions; length/error/aborted mean unfinished work.",
+      type: "counter",
+      lines: sorted(sessionStopReasons).map(([key, total]) => {
+        const [harness = "", reason = ""] = key.split("|");
+        return sample(
+          "jev_session_stop_reasons_total",
+          [
+            ["harness", harness],
+            ["reason", reason],
+          ],
+          total,
+        );
+      }),
     },
     {
       name: "jev_reviews_total",
