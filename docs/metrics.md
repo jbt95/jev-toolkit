@@ -70,7 +70,9 @@ Notes on semantics:
   message's timestamp (`messageTs`); the meter counts one observation per
   harness, session, source, pattern, and message, keeping the latest verdict.
   Re-auditing an overlapping window therefore refreshes a claim instead of
-  adding a second one. Events written before `messageTs` existed count verbatim.
+  adding a second one. Events written before `messageTs` existed use the audit
+  run's timestamp, so repeat claims of one pattern in one session collapse into
+  one observation.
 - **Sessions with calls** counts distinct `sessionID`s on `call` events —
   a session without a `sessionID` (some MCP clients) cannot be counted.
 - **Session facts** (cost, tokens, tool errors, stop reasons) ride on the
