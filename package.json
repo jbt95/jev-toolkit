@@ -6,6 +6,8 @@
   "keywords": [
     "jev",
     "mcp",
+    "omp-plugin",
+    "pi-extension",
     "typesafe"
   ],
   "type": "module",
@@ -29,5 +31,13 @@
     "oxlint": "1.81.0",
     "typescript": "5.9.2",
     "vitest": "3.2.4"
+  },
+  "pi": {
+    "extensions": [
+      "./integrations/omp/index.ts"
+    ],
+    "skills": [
+      "./integrations/omp/SKILL.md"
+    ]
   }
 }

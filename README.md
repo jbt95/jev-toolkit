@@ -110,6 +110,7 @@ src/question-packs/ detection, alignment, reviewer, failure, commit, session lab
 src/eval/          pack lab: fixture replay, answer drift, and agreement reports
 src/audit/          message extractors (opencode DB, claude projects, pi/omp logs)
 src/replay/         review-fixture capture/score measurement aid
+integrations/       harness wiring: opencode plugin · claude-code plugin · pi/omp extension
 tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
 launchd/            always-on meter + nightly label/audit plists
