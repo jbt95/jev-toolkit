@@ -114,7 +114,7 @@ integrations/       harness wiring: opencode plugin · claude-code plugin · pi/
 tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
 launchd/            always-on meter + nightly label/audit plists
-scripts/            install.sh · install-dashboard.sh · check-metrics.sh · nightly.sh
+scripts/            install.sh · install-dashboard.sh · check-metrics.sh · nightly.sh · smoke-*.sh
 tools/oxlint/       vendored anti-slop rule groups
 docs/               this documentation set
 ```
@@ -137,6 +137,14 @@ operator-run and never part of `npm test`:
 ```console
 scripts/smoke-opencode.sh            # agent session + operator checks
 scripts/smoke-opencode.sh --no-agent # operator checks only
+```
+
+One prompt through every wired harness, asserting a fresh Jev call under each
+harness tag — the wiring check to run after install or config changes:
+
+```console
+scripts/smoke-harnesses.sh                    # opencode, claude-code, pi, omp
+scripts/smoke-harnesses.sh --only=omp,pi      # subset
 ```
 
 ## Privacy

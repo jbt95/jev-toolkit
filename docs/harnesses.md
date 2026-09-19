@@ -24,6 +24,12 @@ OMP plugin: the root `package.json` carries the `pi` manifest OMP reads
 step. A `jev-prompt-recall` symlink in `~/.omp/agent/extensions` is the older
 wiring; remove it after install to avoid a duplicate registration.
 
+Verify any wiring change with one prompt through every harness:
+
+```console
+scripts/smoke-harnesses.sh          # asserts a fresh call event per harness tag
+```
+
 Pi direct tools: register the jev server's tools first-class with
 `"directTools": true` on its `~/.pi/agent/mcp.json` entry. Through the generic
 `mcp` proxy the tool arguments travel as an escaped JSON string — a 2026-09-18
