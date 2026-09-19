@@ -2,8 +2,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { existsSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isNotFoundError } from "../core/fs-errors.ts";
 import { AuditError } from "./opportunities.ts";
+import type { PiOmpRoot } from "./sessions.ts";
 
 /**
  * The MCP transport cannot carry a harness session id, so a Jev call only
@@ -224,5 +228,144 @@ export function loadOpencodeTurns(
       }
     },
     catch: () => new AuditError({ source: "opencode" }),
+  });
+}
+
+/** One tool part of a pi/omp assistant message, reduced to what attribution needs. */
+const OmpToolArguments = Schema.Struct({
+  path: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  questions: Schema.optional(Schema.Json),
+});
+const OmpToolPart = Schema.Struct({
+  type: Schema.String,
+  name: Schema.optional(Schema.String),
+  arguments: Schema.optional(OmpToolArguments),
+});
+type OmpToolPart = Schema.Schema.Type<typeof OmpToolPart>;
+const OmpEntry = Schema.Struct({
+  type: Schema.String,
+  id: Schema.optional(Schema.String),
+  timestamp: Schema.optional(Schema.String),
+  message: Schema.optional(
+    Schema.Struct({
+      role: Schema.optional(Schema.String),
+      content: Schema.Array(OmpToolPart),
+    }),
+  ),
+});
+const decodeOmpEntry = Schema.decodeUnknownOption(Schema.fromJsonString(OmpEntry));
+
+const ContentQuestions = Schema.Struct({ questions: Schema.optional(Schema.Json) });
+const decodeContentQuestions = Schema.decodeUnknownOption(Schema.fromJsonString(ContentQuestions));
+
+const questionKeysOf = (questions: Schema.Json | undefined): ReadonlyArray<string> =>
+  Option.fromUndefinedOr(questions).pipe(
+    Option.flatMap((value) => decodeQuestionKeys(value)),
+    Option.map((keys) => Object.keys(keys)),
+    Option.getOrElse((): ReadonlyArray<string> => []),
+  );
+
+/**
+ * Jev invocation for one pi/omp tool part. OMP writes through the device mount
+ * (`write` to `xd://mcp__jev_typesafe_ask`, ask JSON as `arguments.content`);
+ * harnesses that expose the server as a first-class tool call it by name with
+ * `arguments.questions`. Both carry the caller's question keys, which is what
+ * attribution matches against the logged call.
+ */
+const ompInvocation = (part: OmpToolPart): JevInvocation => {
+  const name = part.name ?? "";
+  const path = part.arguments?.path ?? "";
+  const markers = JEV_TOOL_MARKERS.filter(
+    (marker) => name.includes(marker) || path.includes(marker),
+  );
+  if (markers.length === 0) return { text: "", markers: [] };
+  const contentKeys = Option.fromUndefinedOr(part.arguments?.content).pipe(
+    Option.flatMap((content) => decodeContentQuestions(content)),
+    Option.flatMap((decoded) => Option.fromUndefinedOr(decoded.questions)),
+    Option.flatMap((questions) => decodeQuestionKeys(questions)),
+    Option.map((record) => Object.keys(record)),
+    Option.getOrElse((): ReadonlyArray<string> => []),
+  );
+  const keys = [...questionKeysOf(part.arguments?.questions), ...contentKeys];
+  // The tool name stays in the text so verify/review turns, whose question ids
+  // are server-generated, are still matchable through their marker.
+  return { text: [name, path, ...keys].join("\n"), markers };
+};
+
+const piOmpTurnsFromText = (
+  file: string,
+  raw: string,
+  sinceIso: string,
+): ReadonlyArray<SessionTurn> => {
+  const turns: Array<SessionTurn> = [];
+  let sessionID = basename(file, ".jsonl");
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const decoded = decodeOmpEntry(line);
+    if (Option.isNone(decoded)) continue;
+    const entry = decoded.value;
+    const entrySessionID = Option.fromUndefinedOr(entry.id);
+    if (entry.type === "session" && Option.isSome(entrySessionID)) sessionID = entrySessionID.value;
+    if (entry.type !== "message") continue;
+    const message = Option.fromUndefinedOr(entry.message);
+    if (Option.isNone(message) || message.value.role !== "assistant") continue;
+    const timestamp = Option.fromUndefinedOr(entry.timestamp);
+    if (Option.isNone(timestamp) || timestamp.value < sinceIso) continue;
+    const atMs = Date.parse(timestamp.value);
+    if (!Number.isFinite(atMs)) continue;
+    const fragments: Array<string> = [];
+    const markers: Array<string> = [];
+    for (const part of message.value.content) {
+      const invocation = ompInvocation(part);
+      if (invocation.text.length === 0) continue;
+      fragments.push(invocation.text);
+      for (const marker of invocation.markers) {
+        if (!markers.includes(marker)) markers.push(marker);
+      }
+    }
+    if (fragments.length === 0) continue;
+    turns.push({
+      sessionID,
+      startMs: atMs,
+      endMs: atMs,
+      askText: fragments.join("\n"),
+      markers,
+    });
+  }
+  return turns;
+};
+
+/** Read assistant turns that issued a Jev call from pi/omp session files. */
+export function loadPiOmpTurns(
+  roots: ReadonlyArray<PiOmpRoot>,
+  sinceIso: string,
+): Effect.Effect<ReadonlyArray<SessionTurn>, AuditError> {
+  return Effect.gen(function* () {
+    const turns: Array<SessionTurn> = [];
+    for (const { harness, root } of roots) {
+      const entries = yield* Effect.tryPromise({
+        try: () => readdir(root, { recursive: true }),
+        catch: (cause) => cause,
+      }).pipe(
+        // A harness that was never used has no sessions dir; other failures must surface.
+        Effect.catchIf(isNotFoundError, () => Effect.succeed([])),
+        Effect.mapError(() => new AuditError({ source: harness })),
+      );
+      for (const entry of entries) {
+        if (!entry.endsWith(".jsonl")) continue;
+        const file = join(root, entry);
+        const raw = yield* Effect.tryPromise({
+          try: () => readFile(file, "utf8"),
+          catch: (cause) => cause,
+        }).pipe(
+          // A file that vanished mid-scan contributes nothing; keep other errors loud.
+          Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
+          Effect.mapError(() => new AuditError({ source: harness })),
+        );
+        turns.push(...piOmpTurnsFromText(file, raw, sinceIso));
+      }
+    }
+    return turns;
   });
 }

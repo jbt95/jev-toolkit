@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { attributeCalls, loadOpencodeTurns, type SessionTurn } from "@/audit/attribution.ts";
+import {
+  attributeCalls,
+  loadOpencodeTurns,
+  loadPiOmpTurns,
+  type SessionTurn,
+} from "@/audit/attribution.ts";
 
 const turn = (
   sessionID: string,
@@ -181,5 +186,150 @@ describe("loadOpencodeTurns", () => {
     expect(turns[0]?.markers).toEqual(["typesafe_ask"]);
     expect(turns[1]?.sessionID).toBe("sess-verify");
     expect(turns[1]?.markers).toEqual(["typesafe_verify"]);
+  });
+});
+
+const writeJsonl = async (path: string, lines: ReadonlyArray<unknown>): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+};
+
+const ompRoot = async (): Promise<string> => mkdtemp(join(tmpdir(), "jev-test-omp-"));
+
+describe("loadPiOmpTurns", () => {
+  it("reads device writes to a Jev tool and keeps their question keys", async () => {
+    const root = await ompRoot();
+    await writeJsonl(join(root, "-proj", "2026-09-19T09-00-00-000Z_session.jsonl"), [
+      { type: "session", version: 3, id: "sess-omp", timestamp: "2026-09-19T09:00:00.000Z" },
+      {
+        type: "message",
+        id: "m1",
+        timestamp: "2026-09-19T09:00:05.000Z",
+        message: { role: "user", content: [{ type: "text", text: "judge this" }] },
+      },
+      {
+        type: "message",
+        id: "m2",
+        timestamp: "2026-09-19T09:01:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "..." },
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "write",
+              arguments: {
+                path: "xd://mcp__jev_typesafe_ask",
+                content: JSON.stringify({
+                  state: "s",
+                  questions: { quality: { _tag: "noul" }, severity: { _tag: "score" } },
+                }),
+              },
+            },
+            {
+              type: "toolCall",
+              id: "call_2",
+              name: "write",
+              arguments: { path: "src/notes.md", content: "no judgment here" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const turns = await Effect.runPromise(
+      loadPiOmpTurns([{ harness: "omp", root }], "2026-09-19T00:00:00.000Z"),
+    );
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.sessionID).toBe("sess-omp");
+    expect(turns[0]?.askText).toContain("quality");
+    expect(turns[0]?.askText).toContain("severity");
+    expect(turns[0]?.markers).toEqual(["typesafe_ask"]);
+    expect(turns[0]?.startMs).toBe(Date.parse("2026-09-19T09:01:00.000Z"));
+  });
+
+  it("reads first-class MCP calls and honors the since window", async () => {
+    const root = await ompRoot();
+    await writeJsonl(join(root, "-proj", "session-b.jsonl"), [
+      {
+        type: "message",
+        id: "old",
+        timestamp: "2026-09-18T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_old",
+              name: "mcp__jev_typesafe_ask",
+              arguments: { state: "s", questions: { stale: { _tag: "noul" } } },
+            },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "new",
+        timestamp: "2026-09-19T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_verify",
+              name: "mcp__jev_typesafe_verify",
+              arguments: { claims: [], evidence: "x" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const turns = await Effect.runPromise(
+      loadPiOmpTurns([{ harness: "omp", root }], "2026-09-19T00:00:00.000Z"),
+    );
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.markers).toEqual(["typesafe_verify"]);
+  });
+
+  it("yields session ids that attributeCalls can resolve", async () => {
+    const root = await ompRoot();
+    await writeJsonl(join(root, "-proj", "nested", "session-c.jsonl"), [
+      {
+        type: "message",
+        id: "m1",
+        timestamp: "2026-09-19T09:10:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "write",
+              arguments: {
+                path: "xd://mcp__jev_typesafe_ask",
+                content: JSON.stringify({
+                  state: "s",
+                  questions: { decision: { _tag: "choice" } },
+                }),
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const turns = await Effect.runPromise(
+      loadPiOmpTurns([{ harness: "omp", root }], "2026-09-19T00:00:00.000Z"),
+    );
+    const resolved = attributeCalls(turns, [
+      { questionIDs: ["decision"], atMs: Date.parse("2026-09-19T09:10:30.000Z") },
+    ]);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.pipe(Option.getOrUndefined)).toBe("session-c");
   });
 });

@@ -17,7 +17,12 @@ import {
   type DetectedOpportunity,
   type RawMessage,
 } from "../audit/opportunities.ts";
-import { attributeCalls, loadOpencodeTurns } from "../audit/attribution.ts";
+import {
+  attributeCalls,
+  loadOpencodeTurns,
+  loadPiOmpTurns,
+  type SessionTurn,
+} from "../audit/attribution.ts";
 import {
   digestClaude,
   digestOpencode,
@@ -603,16 +608,19 @@ const detectAuditClaims = (
 
 const buildSessionQuestions = (
   events: ReadonlyArray<JevEvent>,
-  inferredSessions: ReadonlyMap<number, string>,
+  inferredSessions: ReadonlyMap<string, string>,
 ): Map<string, Array<string>> => {
   const sessionQuestions = new Map<string, Array<string>>();
-  let unattributed = 0;
+  // Inferred sessions are addressed as `harness|indexWithinThatHarness`, using
+  // the same log order the attribution pass walked per harness.
+  const unattributedCounts = new Map<string, number>();
   for (const event of events) {
     if (event._tag !== "call") continue;
     let sessionID = Option.fromUndefinedOr(event.sessionID);
-    if (Option.isNone(sessionID) && event.harness === "opencode") {
-      sessionID = Option.fromUndefinedOr(inferredSessions.get(unattributed));
-      unattributed += 1;
+    if (Option.isNone(sessionID)) {
+      const index = unattributedCounts.get(event.harness) ?? 0;
+      unattributedCounts.set(event.harness, index + 1);
+      sessionID = Option.fromUndefinedOr(inferredSessions.get(`${event.harness}|${index}`));
     }
     if (Option.isNone(sessionID)) continue;
     const key = `${event.harness}|${sessionID.value}`;
@@ -624,6 +632,52 @@ const buildSessionQuestions = (
   }
   return sessionQuestions;
 };
+
+/**
+ * Recover session ids for calls that carry none, per harness that has an
+ * offline transcript to read: opencode from its DB, pi/omp from session files.
+ * Keys are `harness|index` in log order, matching buildSessionQuestions.
+ */
+const inferCallSessions = (
+  events: ReadonlyArray<JevEvent>,
+  wants: (harness: string) => boolean,
+  sinceIso: string,
+): Effect.Effect<ReadonlyMap<string, string>, string> =>
+  Effect.gen(function* () {
+    const inferred = new Map<string, string>();
+    const attribute = (harness: Harness, turns: ReadonlyArray<SessionTurn>): void => {
+      const calls = events.flatMap((event) =>
+        event._tag === "call" && event.harness === harness && event.sessionID === undefined
+          ? [
+              {
+                questionIDs: event.questions.map((question) => question.id),
+                atMs: Date.parse(event.ts),
+              },
+            ]
+          : [],
+      );
+      attributeCalls(turns, calls).forEach((sessionID, index) => {
+        if (Option.isSome(sessionID)) inferred.set(`${harness}|${index}`, sessionID.value);
+      });
+    };
+    if (wants("opencode")) {
+      const turns = yield* loadOpencodeTurns(opencodeDbPath(), sinceIso).pipe(
+        Effect.mapError((error) => `audit failed: ${error.source}`),
+      );
+      attribute("opencode", turns);
+    }
+    const piOmpRoots = [
+      { harness: "pi" as const, root: piSessionsDir() },
+      { harness: "omp" as const, root: ompSessionsDir() },
+    ].filter((entry) => wants(entry.harness));
+    for (const { harness, root } of piOmpRoots) {
+      const turns = yield* loadPiOmpTurns([{ harness, root }], sinceIso).pipe(
+        Effect.mapError((error) => `audit failed: ${error.source}`),
+      );
+      attribute(harness, turns);
+    }
+    return inferred;
+  });
 
 /** Stage 2: align each detected claim with the questions asked in its session. */
 const correlateAuditClaims = (
@@ -727,28 +781,9 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       .read()
       .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
     // Calls that did not carry a session id are recovered from the transcript:
-    // the MCP transport cannot pass one, so matching the call's question ids
+    // no harness forwards one over MCP, so matching the call's question ids
     // against the assistant turn that contains them restores the link offline.
-    const opencodeCalls = events.flatMap((event) =>
-      event._tag === "call" && event.harness === "opencode" && event.sessionID === undefined
-        ? [event]
-        : [],
-    );
-    const turns = wants("opencode")
-      ? yield* loadOpencodeTurns(opencodeDbPath(), sinceIso).pipe(
-          Effect.mapError((error) => `audit failed: ${error.source}`),
-        )
-      : [];
-    const inferredSessions = new Map<number, string>();
-    attributeCalls(
-      turns,
-      opencodeCalls.map((event) => ({
-        questionIDs: event.questions.map((question) => question.id),
-        atMs: Date.parse(event.ts),
-      })),
-    ).forEach((sessionID, index) => {
-      if (Option.isSome(sessionID)) inferredSessions.set(index, sessionID.value);
-    });
+    const inferredSessions = yield* inferCallSessions(events, wants, sinceIso);
     const sessionQuestions = buildSessionQuestions(events, inferredSessions);
 
     const correlated = yield* correlateAuditClaims(client.ask, harness, detected, sessionQuestions);
