@@ -94,7 +94,7 @@ All services follow the repo conventions: class-style `Context.Service`,
 
 ## Event log
 
-One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Five kinds,
+One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Six kinds,
 all validated by `src/core/schema.ts`:
 
 | Kind | Fields (abridged) | Written by |
@@ -104,6 +104,7 @@ all validated by `src/core/schema.ts`:
 | `triage` | harness, feature (failure/review/commit/verify), numeric summary | triage commands, `typesafe_verify` |
 | `session_label` | harness, sessionID, outcome, friction, waste, taskType, costUsd?, tokens?, toolErrors?, stopReasons?, parentSessionID? | `label sessions` |
 | `review` | harness, sessionID, model, dimensions (normalized score, confidence, applicable, direction?), topWeakness? | `typesafe_review` |
+| `attribution` | harness, sessionID | `audit run`, once per recovered call→session link |
 
 Digest facts (cost, tokens, tool errors, stop reasons, parent session) travel
 on the label so the meter can total them per session; `messageTs` on an

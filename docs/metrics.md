@@ -73,8 +73,11 @@ Notes on semantics:
   adding a second one. Events written before `messageTs` existed use the audit
   run's timestamp, so repeat claims of one pattern in one session collapse into
   one observation.
-- **Sessions with calls** counts distinct `sessionID`s on `call` events —
-  a session without a `sessionID` (some MCP clients) cannot be counted.
+- **Sessions with calls** counts distinct `sessionID`s on `call` events plus
+  every `attribution` event `jev audit run` records when it recovers a link
+  from a transcript. That is how pi/omp sessions appear at all: their calls
+  carry no id in the log. Coverage and the dashboard's *sessions touched*
+  panel both rest on this count.
 - **Session facts** (cost, tokens, tool errors, stop reasons) ride on the
   `session_label` event, so they cover labeled sessions only; a session that
   was never labeled contributes to no fact series. Facts follow the latest

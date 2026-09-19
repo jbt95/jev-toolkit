@@ -775,6 +775,41 @@ const appendOpportunityEvents = (
     }
   });
 
+/**
+ * Record recovered call→session links so the meter can count which sessions
+ * used Jev. One event per harness and session, skipped when the log already
+ * has it; a subagent call records the parent session it was credited to as
+ * well, matching the alignment rule.
+ */
+const appendAttributionEvents = (
+  log: EventLogService,
+  events: ReadonlyArray<JevEvent>,
+  inferred: ReadonlyMap<string, ReadonlyArray<string>>,
+  now: number,
+): Effect.Effect<void, string> =>
+  Effect.gen(function* () {
+    const recorded = new Set(
+      events.flatMap((event) =>
+        event._tag === "attribution" ? [`${event.harness}|${event.sessionID}`] : [],
+      ),
+    );
+    const ts = new Date(now).toISOString();
+    for (const [key, sessionIDs] of inferred) {
+      const separator = key.indexOf("|");
+      const harnessTag = separator < 0 ? "" : key.slice(0, separator);
+      const harness = Schema.decodeUnknownOption(Harness)(harnessTag);
+      if (Option.isNone(harness)) continue;
+      for (const sessionID of sessionIDs) {
+        const identity = `${harness.value}|${sessionID}`;
+        if (recorded.has(identity)) continue;
+        recorded.add(identity);
+        yield* log
+          .append({ _tag: "attribution", ts, harness: harness.value, sessionID })
+          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+      }
+    }
+  });
+
 const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
   Effect.gen(function* () {
     const client = yield* JevClient;
@@ -814,7 +849,10 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
 
     const correlated = yield* correlateAuditClaims(client.ask, harness, detected, sessionQuestions);
 
-    if (!dryRun) yield* appendOpportunityEvents(log, correlated, now);
+    if (!dryRun) {
+      yield* appendAttributionEvents(log, events, inferredSessions, now);
+      yield* appendOpportunityEvents(log, correlated, now);
+    }
     yield* Effect.sync(() => {
       printAuditSummary({ messages, correlated }, dryRun);
     });

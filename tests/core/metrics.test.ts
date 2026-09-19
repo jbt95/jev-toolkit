@@ -154,6 +154,35 @@ describe("metrics", () => {
     );
   });
 
+  it("counts attributed sessions as Jev users", () => {
+    const attributed: ReadonlyArray<JevEvent> = [
+      ...events,
+      {
+        _tag: "attribution",
+        ts: "2026-09-17T00:10:00.000Z",
+        harness: "omp",
+        sessionID: "omp-sess-1",
+      },
+      {
+        _tag: "attribution",
+        ts: "2026-09-17T00:10:01.000Z",
+        harness: "omp",
+        sessionID: "omp-sess-2",
+      },
+      {
+        // Recovered again on a later audit: the same session must not double-count.
+        _tag: "attribution",
+        ts: "2026-09-18T00:10:00.000Z",
+        harness: "omp",
+        sessionID: "omp-sess-2",
+      },
+    ];
+
+    const attributedBody = render(collect(attributed));
+
+    expect(attributedBody).toContain('jev_sessions_with_calls_total{harness="omp"} 2');
+  });
+
   it("counts a re-detected message once and keeps the latest verdict", () => {
     const repeated: ReadonlyArray<JevEvent> = [
       ...events,

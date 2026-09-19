@@ -159,11 +159,23 @@ export const SessionLabelEvent = Schema.TaggedStruct("session_label", {
 });
 export type SessionLabelEvent = Schema.Schema.Type<typeof SessionLabelEvent>;
 
+/**
+ * A call recovered to a session offline by `audit run`. No harness forwards a
+ * session id over MCP, so without this record the meter cannot see which
+ * sessions used Jev at all.
+ */
+export const AttributionEvent = Schema.TaggedStruct("attribution", {
+  ...BaseEvent,
+  sessionID: Schema.String,
+});
+export type AttributionEvent = Schema.Schema.Type<typeof AttributionEvent>;
+
 export const JevEvent = Schema.Union([
   CallEvent,
   OpportunityEvent,
   TriageEvent,
   SessionLabelEvent,
   ReviewEvent,
+  AttributionEvent,
 ]);
 export type JevEvent = Schema.Schema.Type<typeof JevEvent>;

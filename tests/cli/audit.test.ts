@@ -214,6 +214,19 @@ describe("jev audit", () => {
     expect(opportunities).toHaveLength(1);
     expect(opportunities[0]?.harness).toBe("omp");
     expect(opportunities[0]?.matched).toBe(true);
+    // The recovery is recorded, so the meter can count both sessions as Jev users.
+    const attributions = events.filter((event) => event._tag === "attribution");
+    expect(attributions.map((event) => event.sessionID).sort()).toEqual([
+      "child-sess",
+      "parent-sess",
+    ]);
+
+    const secondRun = await Effect.runPromise(
+      runCli(["audit", "run", "--harness", "omp"], cliLayers(path, respond)),
+    );
+    expect(secondRun).toBe(0);
+    const afterSecond = await Effect.runPromise(makeEventLog(path).read());
+    expect(afterSecond.filter((event) => event._tag === "attribution")).toHaveLength(2);
   });
 
   it("reads nothing for an unknown harness filter", async () => {

@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService, EventLogStats } from "./events.ts";
 import type {
+  AttributionEvent,
   CallEvent,
   JevEvent,
   OpportunityEvent,
@@ -197,6 +198,13 @@ const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
   }
 };
 
+/** A recovered call→session link counts the session as a Jev user. */
+const collectAttribution = (acc: EventAccumulator, event: AttributionEvent): void => {
+  const set = acc.sessions.get(event.harness) ?? new Set<string>();
+  set.add(event.sessionID);
+  acc.sessions.set(event.harness, set);
+};
+
 const collectOpportunity = (acc: EventAccumulator, event: OpportunityEvent): void => {
   // One detection = one message pattern; a later audit of the same window
   // refreshes the verdict instead of adding a second claim observation.
@@ -371,6 +379,9 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         break;
       case "opportunity":
         collectOpportunity(acc, event);
+        break;
+      case "attribution":
+        collectAttribution(acc, event);
         break;
       case "triage":
         triage.set(event.feature, (triage.get(event.feature) ?? 0) + 1);
