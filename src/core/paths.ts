@@ -29,9 +29,9 @@ export function claudeProjectsDir(): string {
 }
 
 export function piSessionsDir(): string {
-  return join(homedir(), ".pi", "agent", "sessions");
+  return process.env.JEV_PI_SESSIONS_DIR ?? join(homedir(), ".pi", "agent", "sessions");
 }
 
 export function ompSessionsDir(): string {
-  return join(homedir(), ".omp", "agent", "sessions");
+  return process.env.JEV_OMP_SESSIONS_DIR ?? join(homedir(), ".omp", "agent", "sessions");
 }

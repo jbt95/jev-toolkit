@@ -330,7 +330,7 @@ type PiEntry = Schema.Schema.Type<typeof PiEntry>;
 const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
 
 /** Session files are named `<timestamp>_<session id>.jsonl`; keep the id. */
-const sessionIDFromFile = (path: string): string => {
+export const sessionIDFromFile = (path: string): string => {
   const base = basename(path, ".jsonl");
   const separator = base.indexOf("_");
   return separator < 0 ? base : base.slice(separator + 1);
@@ -389,7 +389,7 @@ const digestPiOmpText = (
   sinceIso: string,
 ): Option.Option<SessionDigest> => {
   const draft = newDraft();
-  let sessionID = basename(file, ".jsonl");
+  let sessionID = sessionIDFromFile(file);
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
     const decoded = decodePiEntry(line);

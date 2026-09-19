@@ -10,6 +10,7 @@ import { matchQuantitativeClaim } from "../core/detector.ts";
 import { isNotFoundError } from "../core/fs-errors.ts";
 import { Harness, type ClaimKind } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
+import { sessionIDFromFile } from "./sessions.ts";
 
 export class AuditError extends Data.TaggedError("AuditError")<{ readonly source: string }> {}
 
@@ -22,6 +23,9 @@ export const RawMessage = Schema.Struct({
   harness: Harness,
   sessionID: Schema.String,
   source: MessageSource,
+  /** Message timestamp; with the other fields it identifies one detection, so
+   * repeated audits of the same window cannot double-count a claim. */
+  ts: Schema.String,
   text: Schema.String,
 });
 export type RawMessage = Schema.Schema.Type<typeof RawMessage>;
@@ -30,6 +34,7 @@ export interface DetectedOpportunity {
   readonly harness: RawMessage["harness"];
   readonly sessionID: string;
   readonly source: MessageSource;
+  readonly ts: string;
   readonly pattern: ClaimKind;
   readonly excerpt: string;
   /** Sanitized window around the claim; the alignment prompt needs context. */
@@ -69,6 +74,7 @@ export const toDetectedOpportunity = (
     harness: message.harness,
     sessionID: message.sessionID,
     source: message.source,
+    ts: message.ts,
     pattern: kind,
     excerpt,
     context: windowAround(
@@ -82,11 +88,12 @@ const messageFromText = (
   harness: RawMessage["harness"],
   sessionID: string,
   source: MessageSource,
+  ts: string,
   text: string,
 ): Option.Option<RawMessage> => {
   const prose = stripFencedCode(text);
   if (prose.trim().length === 0) return Option.none();
-  return Option.some({ harness, sessionID, source, text: clip(redact(prose), 1000) });
+  return Option.some({ harness, sessionID, source, ts, text: clip(redact(prose), 1000) });
 };
 
 export interface PiOmpRoot {
@@ -129,7 +136,11 @@ const opencodeText = (data: string): Option.Option<string> =>
     Option.orElse(() => Option.map(decodeOpencodeText(data), (plain) => plain.text)),
   );
 
-const OpencodeRow = Schema.Struct({ session_id: Schema.String, data: Schema.String });
+const OpencodeRow = Schema.Struct({
+  session_id: Schema.String,
+  time_created: Schema.Number,
+  data: Schema.String,
+});
 const decodeRow = Schema.decodeUnknownOption(OpencodeRow);
 
 const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
@@ -153,7 +164,8 @@ export function extractOpencode(
         const sinceMs = Date.parse(sinceIso);
         const rows = db
           .prepare(
-            "SELECT session_id, data FROM session_message WHERE type = ? AND time_created >= ?",
+            "SELECT session_id, time_created, data FROM session_message " +
+              "WHERE type = ? AND time_created >= ?",
           )
           .all(messageType, sinceMs);
         const messages: Array<RawMessage> = [];
@@ -165,7 +177,13 @@ export function extractOpencode(
           if (Option.isNone(text)) continue;
           messages.push(
             ...Option.toArray(
-              messageFromText("opencode", decodedRow.value.session_id, source, text.value),
+              messageFromText(
+                "opencode",
+                decodedRow.value.session_id,
+                source,
+                new Date(decodedRow.value.time_created).toISOString(),
+                text.value,
+              ),
             ),
           );
         }
@@ -202,6 +220,7 @@ const claudeMessages = (
           "claude-code",
           sessionID,
           "assistant_message",
+          Option.getOrElse(Option.fromUndefinedOr(entry.timestamp), () => ""),
           textOf(message.value.content),
         ),
       ),
@@ -234,7 +253,7 @@ const piOmpMessages = (
   sinceIso: string,
 ): ReadonlyArray<RawMessage> => {
   const messages: Array<RawMessage> = [];
-  let sessionID = basename(file, ".jsonl");
+  let sessionID = sessionIDFromFile(file);
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
     const decoded = decodePiEntry(line);
@@ -252,7 +271,13 @@ const piOmpMessages = (
     if (tooOld) continue;
     messages.push(
       ...Option.toArray(
-        messageFromText(harness, sessionID, "assistant_message", textOf(message.value.content)),
+        messageFromText(
+          harness,
+          sessionID,
+          "assistant_message",
+          Option.getOrElse(Option.fromUndefinedOr(entry.timestamp), () => ""),
+          textOf(message.value.content),
+        ),
       ),
     );
   }

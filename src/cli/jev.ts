@@ -51,7 +51,13 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import { Harness, QuestionMap, type Answer, type JevEvent } from "../core/schema.ts";
+import {
+  Harness,
+  QuestionMap,
+  type Answer,
+  type CallEvent,
+  type JevEvent,
+} from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
@@ -608,27 +614,33 @@ const detectAuditClaims = (
 
 const buildSessionQuestions = (
   events: ReadonlyArray<JevEvent>,
-  inferredSessions: ReadonlyMap<string, string>,
+  inferredSessions: ReadonlyMap<string, ReadonlyArray<string>>,
 ): Map<string, Array<string>> => {
   const sessionQuestions = new Map<string, Array<string>>();
   // Inferred sessions are addressed as `harness|indexWithinThatHarness`, using
   // the same log order the attribution pass walked per harness.
   const unattributedCounts = new Map<string, number>();
+
+  /** Sessions a call credits: its own, or every session inference resolved
+   * (an issuing subagent session and, when recorded, its parent). */
+  const creditsFor = (event: CallEvent): ReadonlyArray<string> => {
+    const own = Option.fromUndefinedOr(event.sessionID);
+    if (Option.isSome(own)) return [own.value];
+    const index = unattributedCounts.get(event.harness) ?? 0;
+    unattributedCounts.set(event.harness, index + 1);
+    return inferredSessions.get(`${event.harness}|${index}`) ?? [];
+  };
+
   for (const event of events) {
     if (event._tag !== "call") continue;
-    let sessionID = Option.fromUndefinedOr(event.sessionID);
-    if (Option.isNone(sessionID)) {
-      const index = unattributedCounts.get(event.harness) ?? 0;
-      unattributedCounts.set(event.harness, index + 1);
-      sessionID = Option.fromUndefinedOr(inferredSessions.get(`${event.harness}|${index}`));
+    for (const sessionID of creditsFor(event)) {
+      const key = `${event.harness}|${sessionID}`;
+      const list = sessionQuestions.get(key) ?? [];
+      for (const question of event.questions) {
+        if (!list.includes(question.id)) list.push(question.id);
+      }
+      sessionQuestions.set(key, list);
     }
-    if (Option.isNone(sessionID)) continue;
-    const key = `${event.harness}|${sessionID.value}`;
-    const list = sessionQuestions.get(key) ?? [];
-    for (const question of event.questions) {
-      if (!list.includes(question.id)) list.push(question.id);
-    }
-    sessionQuestions.set(key, list);
   }
   return sessionQuestions;
 };
@@ -636,15 +648,17 @@ const buildSessionQuestions = (
 /**
  * Recover session ids for calls that carry none, per harness that has an
  * offline transcript to read: opencode from its DB, pi/omp from session files.
+ * A subagent call also credits the session that spawned it, so a claim written
+ * in a parent session can align with questions its subagents asked.
  * Keys are `harness|index` in log order, matching buildSessionQuestions.
  */
 const inferCallSessions = (
   events: ReadonlyArray<JevEvent>,
   wants: (harness: string) => boolean,
   sinceIso: string,
-): Effect.Effect<ReadonlyMap<string, string>, string> =>
+): Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>, string> =>
   Effect.gen(function* () {
-    const inferred = new Map<string, string>();
+    const inferred = new Map<string, ReadonlyArray<string>>();
     const attribute = (harness: Harness, turns: ReadonlyArray<SessionTurn>): void => {
       const calls = events.flatMap((event) =>
         event._tag === "call" && event.harness === harness && event.sessionID === undefined
@@ -656,8 +670,19 @@ const inferCallSessions = (
             ]
           : [],
       );
+      const parentOf = new Map<string, string>();
+      for (const turn of turns) {
+        if (turn.parentSessionID !== undefined) {
+          parentOf.set(turn.sessionID, turn.parentSessionID);
+        }
+      }
       attributeCalls(turns, calls).forEach((sessionID, index) => {
-        if (Option.isSome(sessionID)) inferred.set(`${harness}|${index}`, sessionID.value);
+        if (Option.isNone(sessionID)) return;
+        const parent = parentOf.get(sessionID.value);
+        inferred.set(
+          `${harness}|${index}`,
+          parent === undefined ? [sessionID.value] : [sessionID.value, parent],
+        );
       });
     };
     if (wants("opencode")) {
@@ -744,6 +769,7 @@ const appendOpportunityEvents = (
           source: opportunity.source,
           pattern: opportunity.pattern,
           matched: opportunity.matched,
+          messageTs: opportunity.ts,
         })
         .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
     }

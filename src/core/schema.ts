@@ -96,6 +96,9 @@ export const OpportunityEvent = Schema.TaggedStruct("opportunity", {
   source: Schema.Literals(["user_prompt", "assistant_message"]),
   pattern: Schema.String,
   matched: Schema.Boolean,
+  /** Timestamp of the detected message; identifies one detection so repeated
+   * audit windows cannot double-count the same claim. */
+  messageTs: Schema.optional(Schema.String),
 });
 export type OpportunityEvent = Schema.Schema.Type<typeof OpportunityEvent>;
 

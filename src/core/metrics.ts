@@ -104,6 +104,7 @@ interface EventAccumulator {
   readonly callErrors: Map<string, number>;
   readonly tokens: Map<string, { input: number; output: number }>;
   readonly opportunities: Map<string, { matched: number; missed: number }>;
+  readonly detectedOpportunities: Map<string, OpportunityEvent>;
   readonly sessions: Map<string, Set<string>>;
   readonly labeledSessions: Map<string, Set<string>>;
   readonly triage: Map<string, number>;
@@ -129,6 +130,7 @@ const newAccumulator = (): EventAccumulator => ({
   callErrors: new Map(),
   tokens: new Map(),
   opportunities: new Map(),
+  detectedOpportunities: new Map(),
   sessions: new Map(),
   labeledSessions: new Map(),
   triage: new Map(),
@@ -196,11 +198,26 @@ const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
 };
 
 const collectOpportunity = (acc: EventAccumulator, event: OpportunityEvent): void => {
-  const key = `${event.harness}|${event.source}`;
-  const entry = acc.opportunities.get(key) ?? { matched: 0, missed: 0 };
-  if (event.matched) entry.matched += 1;
-  else entry.missed += 1;
-  acc.opportunities.set(key, entry);
+  // One detection = one message pattern; a later audit of the same window
+  // refreshes the verdict instead of adding a second claim observation.
+  const identity = [
+    event.harness,
+    event.sessionID ?? "",
+    event.source,
+    event.pattern,
+    event.messageTs ?? event.ts,
+  ].join("|");
+  acc.detectedOpportunities.set(identity, event);
+};
+
+const finalizeOpportunities = (acc: EventAccumulator): void => {
+  for (const event of acc.detectedOpportunities.values()) {
+    const key = `${event.harness}|${event.source}`;
+    const entry = acc.opportunities.get(key) ?? { matched: 0, missed: 0 };
+    if (event.matched) entry.matched += 1;
+    else entry.missed += 1;
+    acc.opportunities.set(key, entry);
+  }
 };
 
 const collectReview = (acc: EventAccumulator, event: ReviewEvent): void => {
@@ -368,6 +385,7 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
   }
 
   finalizeSessionLabels(acc);
+  finalizeOpportunities(acc);
 
   const families: Array<MetricFamily> = [
     {

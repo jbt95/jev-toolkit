@@ -154,6 +154,42 @@ describe("metrics", () => {
     );
   });
 
+  it("counts a re-detected message once and keeps the latest verdict", () => {
+    const repeated: ReadonlyArray<JevEvent> = [
+      ...events,
+      {
+        _tag: "opportunity",
+        ts: "2026-09-17T00:05:00.000Z",
+        harness: "cli",
+        sessionID: "s9",
+        source: "assistant_message",
+        pattern: "percent",
+        matched: false,
+        messageTs: "2026-09-16T10:00:00.000Z",
+      },
+      {
+        // A later audit of the same message: same identity, refreshed verdict.
+        _tag: "opportunity",
+        ts: "2026-09-17T06:00:00.000Z",
+        harness: "cli",
+        sessionID: "s9",
+        source: "assistant_message",
+        pattern: "percent",
+        matched: true,
+        messageTs: "2026-09-16T10:00:00.000Z",
+      },
+    ];
+
+    const repeatedBody = render(collect(repeated));
+
+    expect(repeatedBody).toContain(
+      'jev_opportunities_total{harness="cli",source="assistant_message",matched="true"} 2',
+    );
+    expect(repeatedBody).toContain(
+      'jev_opportunities_total{harness="cli",source="assistant_message",matched="false"} 1',
+    );
+  });
+
   it("sums tokens and counts triage runs", () => {
     expect(body).toContain('jev_tokens_total{harness="cli",kind="input"} 180');
     expect(body).toContain('jev_tokens_total{harness="cli",kind="output"} 18');

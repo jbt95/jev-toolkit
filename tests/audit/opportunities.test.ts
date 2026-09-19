@@ -94,6 +94,7 @@ describe("audit extractors", () => {
       harness: "cli",
       sessionID: "s",
       source: "assistant_message",
+      ts: "2026-09-16T12:00:00.000Z",
       text: "About 70% done.",
     };
     const percent = toDetectedOpportunity(message, "percent");

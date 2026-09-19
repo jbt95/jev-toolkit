@@ -3,11 +3,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isNotFoundError } from "../core/fs-errors.ts";
 import { AuditError } from "./opportunities.ts";
-import type { PiOmpRoot } from "./sessions.ts";
+import { sessionIDFromFile, type PiOmpRoot } from "./sessions.ts";
 
 /**
  * The MCP transport cannot carry a harness session id, so a Jev call only
@@ -29,6 +29,8 @@ export interface CallFingerprint {
 /** One assistant turn that issued at least one Jev call. */
 export interface SessionTurn {
   readonly sessionID: string;
+  /** For subagent sessions: the session that spawned them, when recorded. */
+  readonly parentSessionID?: string;
   readonly startMs: number;
   readonly endMs: number;
   /** Text from the Jev invocations only: the call code and question keys. */
@@ -247,6 +249,7 @@ const OmpEntry = Schema.Struct({
   type: Schema.String,
   id: Schema.optional(Schema.String),
   timestamp: Schema.optional(Schema.String),
+  parentSession: Schema.optional(Schema.String),
   message: Schema.optional(
     Schema.Struct({
       role: Schema.optional(Schema.String),
@@ -255,6 +258,7 @@ const OmpEntry = Schema.Struct({
   ),
 });
 const decodeOmpEntry = Schema.decodeUnknownOption(Schema.fromJsonString(OmpEntry));
+type OmpEntry = Schema.Schema.Type<typeof OmpEntry>;
 
 const ContentQuestions = Schema.Struct({ questions: Schema.optional(Schema.Json) });
 const decodeContentQuestions = Schema.decodeUnknownOption(Schema.fromJsonString(ContentQuestions));
@@ -293,45 +297,63 @@ const ompInvocation = (part: OmpToolPart): JevInvocation => {
   return { text: [name, path, ...keys].join("\n"), markers };
 };
 
+/** One assistant message as a turn, or none when it made no Jev call. */
+const turnFromMessage = (
+  sessionID: string,
+  parentSessionID: string | undefined,
+  entry: OmpEntry,
+  sinceIso: string,
+): Option.Option<SessionTurn> => {
+  const message = Option.fromUndefinedOr(entry.message);
+  if (Option.isNone(message) || message.value.role !== "assistant") return Option.none();
+  const timestamp = Option.fromUndefinedOr(entry.timestamp);
+  if (Option.isNone(timestamp) || timestamp.value < sinceIso) return Option.none();
+  const atMs = Date.parse(timestamp.value);
+  if (!Number.isFinite(atMs)) return Option.none();
+  const fragments: Array<string> = [];
+  const markers: Array<string> = [];
+  for (const part of message.value.content) {
+    const invocation = ompInvocation(part);
+    if (invocation.text.length === 0) continue;
+    fragments.push(invocation.text);
+    for (const marker of invocation.markers) {
+      if (!markers.includes(marker)) markers.push(marker);
+    }
+  }
+  if (fragments.length === 0) return Option.none();
+  return Option.some({
+    sessionID,
+    parentSessionID,
+    startMs: atMs,
+    endMs: atMs,
+    askText: fragments.join("\n"),
+    markers,
+  });
+};
+
 const piOmpTurnsFromText = (
   file: string,
   raw: string,
   sinceIso: string,
 ): ReadonlyArray<SessionTurn> => {
   const turns: Array<SessionTurn> = [];
-  let sessionID = basename(file, ".jsonl");
+  let sessionID = sessionIDFromFile(file);
+  let parentSessionID: string | undefined;
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
     const decoded = decodeOmpEntry(line);
     if (Option.isNone(decoded)) continue;
     const entry = decoded.value;
-    const entrySessionID = Option.fromUndefinedOr(entry.id);
-    if (entry.type === "session" && Option.isSome(entrySessionID)) sessionID = entrySessionID.value;
-    if (entry.type !== "message") continue;
-    const message = Option.fromUndefinedOr(entry.message);
-    if (Option.isNone(message) || message.value.role !== "assistant") continue;
-    const timestamp = Option.fromUndefinedOr(entry.timestamp);
-    if (Option.isNone(timestamp) || timestamp.value < sinceIso) continue;
-    const atMs = Date.parse(timestamp.value);
-    if (!Number.isFinite(atMs)) continue;
-    const fragments: Array<string> = [];
-    const markers: Array<string> = [];
-    for (const part of message.value.content) {
-      const invocation = ompInvocation(part);
-      if (invocation.text.length === 0) continue;
-      fragments.push(invocation.text);
-      for (const marker of invocation.markers) {
-        if (!markers.includes(marker)) markers.push(marker);
-      }
+    if (entry.type === "session") {
+      const entrySessionID = Option.fromUndefinedOr(entry.id);
+      if (Option.isSome(entrySessionID)) sessionID = entrySessionID.value;
+      const parent = Option.fromUndefinedOr(entry.parentSession);
+      if (Option.isSome(parent)) parentSessionID = sessionIDFromFile(parent.value);
+      continue;
     }
-    if (fragments.length === 0) continue;
-    turns.push({
-      sessionID,
-      startMs: atMs,
-      endMs: atMs,
-      askText: fragments.join("\n"),
-      markers,
-    });
+    if (entry.type !== "message") continue;
+    const turn = turnFromMessage(sessionID, parentSessionID, entry, sinceIso);
+    if (Option.isSome(turn)) turns.push(turn.value);
   }
   return turns;
 };

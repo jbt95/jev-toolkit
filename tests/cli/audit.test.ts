@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { runCli } from "@/cli/jev.ts";
 import { makeEventLog } from "@/core/events.ts";
 import {
@@ -37,6 +40,8 @@ const respond = (body: string): WireResponse => {
 
 afterEach(() => {
   delete process.env.JEV_OPENCODE_DB;
+  delete process.env.JEV_OMP_SESSIONS_DIR;
+  delete process.env.JEV_PI_SESSIONS_DIR;
   vi.restoreAllMocks();
 });
 
@@ -132,6 +137,83 @@ describe("jev audit", () => {
     expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain("0.0%");
     const events = await Effect.runPromise(makeEventLog(path).read());
     expect(events.filter((event) => event._tag === "opportunity")).toEqual([]);
+  });
+
+  it("attributes an omp subagent call to its parent session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jev-omp-root-"));
+    const emptyPiRoot = await mkdtemp(join(tmpdir(), "jev-pi-root-"));
+    process.env.JEV_OMP_SESSIONS_DIR = root;
+    process.env.JEV_PI_SESSIONS_DIR = emptyPiRoot;
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const parentFile = join(root, "-proj", "2026-09-19T09-00-00-000Z_parent-sess.jsonl");
+    await mkdir(dirname(parentFile), { recursive: true });
+    await writeFile(
+      parentFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        timestamp: at,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "About 70% of parsers break here." }],
+        },
+      })}\n`,
+    );
+    const childFile = join(root, "-proj", "child.jsonl");
+    const childLines: ReadonlyArray<unknown> = [
+      { type: "session", version: 3, id: "child-sess", timestamp: at, parentSession: parentFile },
+      {
+        type: "message",
+        id: "m2",
+        timestamp: at,
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "write",
+              arguments: {
+                path: "xd://mcp__jev_typesafe_ask",
+                content: JSON.stringify({
+                  state: "s",
+                  questions: { recommendation: { _tag: "noul" } },
+                }),
+              },
+            },
+          ],
+        },
+      },
+    ];
+    await writeFile(childFile, `${childLines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+
+    const path = await tempEventsPath();
+    await Effect.runPromise(
+      makeEventLog(path).append({
+        _tag: "call",
+        ts: new Date().toISOString(),
+        harness: "omp",
+        // No sessionID: no harness forwards one over MCP.
+        model: "jev-test",
+        latencyMs: 5,
+        status: "ok",
+        questions: [{ id: "recommendation", type: "noul" }],
+      }),
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await Effect.runPromise(
+      runCli(["audit", "run", "--harness", "omp"], cliLayers(path, respond)),
+    );
+
+    expect(code).toBe(0);
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("total: messages=1 detected=1 matched=1");
+    const events = await Effect.runPromise(makeEventLog(path).read());
+    const opportunities = events.filter((event) => event._tag === "opportunity");
+    expect(opportunities).toHaveLength(1);
+    expect(opportunities[0]?.harness).toBe("omp");
+    expect(opportunities[0]?.matched).toBe(true);
   });
 
   it("reads nothing for an unknown harness filter", async () => {
