@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type { Fetch } from "@typesafe-ai/sdk";
+import * as Schema from "effect/Schema";
+import {
+  APIConnectionError,
+  APIError,
+  APITimeoutError,
+  TypeSafeError,
+  type Fetch,
+} from "@typesafe-ai/sdk";
 import type { AskInput } from "@/core/client.ts";
+import type { Question } from "@/core/schema.ts";
 import { makeEventLog } from "@/core/events.ts";
-import { makeSdkJevClient, sdkBaseURL } from "@/core/sdk-client.ts";
+import { makeSdkJevClient, mapSdkFailure, sdkBaseURL } from "@/core/sdk-client.ts";
 import { tempEventsPath } from "../helpers.ts";
 
 const wireSuccess = JSON.stringify({
@@ -213,6 +221,79 @@ describe("makeSdkJevClient", () => {
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toContain('"type":"noul"');
     expect(bodies[0]).not.toContain("_tag");
+  });
+});
+
+const SentBody = Schema.Struct({
+  questions: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      type: Schema.String,
+      instructions: Schema.String,
+      criteria: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+    }),
+  ),
+});
+const decodeSentBody = Schema.decodeUnknownSync(Schema.fromJsonString(SentBody));
+
+const captureFetch = () => {
+  const bodies: Array<string> = [];
+  const fetchImpl: Fetch = (_input, init) => {
+    bodies.push(String(init?.body ?? ""));
+    return Promise.resolve(
+      new Response(wireSuccess, { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+  };
+  return { fetch: fetchImpl, bodies };
+};
+
+describe("noul criteria over the wire", () => {
+  const askWith = async (
+    criteria: Record<string, string> | undefined,
+  ): Promise<Record<string, string> | undefined> => {
+    const captured = captureFetch();
+    const client = makeSdkJevClient({
+      apiKey: Option.some("test-key"),
+      log: makeEventLog(await tempEventsPath()),
+      fetch: captured.fetch,
+    });
+    type NoulQuestion = Extract<Question, { readonly _tag: "noul" }>;
+    const question: NoulQuestion =
+      criteria === undefined
+        ? { _tag: "noul", instructions: "Does it hold?" }
+        : { _tag: "noul", instructions: "Does it hold?", criteria };
+    await Effect.runPromise(
+      client.ask({ harness: "cli", state: "x", questions: { is_dupe: question } }),
+    );
+    return decodeSentBody(captured.bodies[0] ?? "{}").questions["is_dupe"]?.criteria;
+  };
+
+  it("sends both labels, one label, or none to match the question", async () => {
+    expect(await askWith({ true: "it holds", false: "it does not" })).toEqual({
+      true: "it holds",
+      false: "it does not",
+    });
+    expect(await askWith({ true: "it holds" })).toEqual({ true: "it holds" });
+    expect(await askWith({ false: "it does not" })).toEqual({ false: "it does not" });
+    expect(await askWith({ irrelevant: "ignored" })).toBeUndefined();
+    expect(await askWith(undefined)).toBeUndefined();
+  });
+});
+
+describe("mapSdkFailure", () => {
+  it("maps every SDK failure class to its Jev error tag", () => {
+    const headers = new Headers();
+    const cases: ReadonlyArray<readonly [unknown, string]> = [
+      [new APIError(500, "boom", headers), "JevApiError"],
+      [new APITimeoutError(1000), "JevTimeoutError"],
+      [new APIConnectionError("closed"), "JevTransportError"],
+      [new TypeSafeError("bad shape"), "JevDecodeError"],
+      [new Error("unexpected"), "JevTransportError"],
+    ];
+
+    for (const [cause, tag] of cases) {
+      expect(mapSdkFailure(cause)._tag).toBe(tag);
+    }
   });
 });
 

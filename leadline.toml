@@ -1,0 +1,70 @@
+# Leadline configuration for jev-toolkit.
+#
+# Scope: product code under src/, its tests, and the harness integrations.
+# tools/oxlint holds vendored anti-slop rule code copied from upstream and
+# covered by its own rule tests; it would otherwise dominate every complexity
+# and CRAP list, so it stays out of analysis scope.
+
+[analysis]
+exclude = ["tools/**", "coverage/**"]
+
+[thresholds.function]
+cognitive = 20
+cyclomatic = 15
+max_nesting = 5
+crap = 20.0
+
+[regressions]
+cognitive = 2
+cyclomatic = 1
+max_nesting = 0
+crap = 1.0
+
+[duplication]
+min_tokens = 100
+min_lines = 10
+
+# Layering: the modules below form the toolkit's spine. Each rule pins an
+# invariant the code already holds, so a future import that breaks it fails
+# the policy gate instead of shipping.
+
+[[architecture.rules]]
+name = "core-stays-harness-agnostic"
+source = "src/core/**"
+deny = [
+  "src/audit/**",
+  "src/cli/**",
+  "src/eval/**",
+  "src/mcp/**",
+  "src/question-packs/**",
+  "src/replay/**",
+]
+severity = "error"
+
+[[architecture.rules]]
+name = "question-packs-do-not-drive-surfaces"
+source = "src/question-packs/**"
+deny = ["src/cli/**", "src/eval/**", "src/mcp/**", "src/replay/**"]
+severity = "error"
+
+[[architecture.rules]]
+name = "audit-reads-the-log-not-the-cli"
+source = "src/audit/**"
+deny = ["src/cli/**", "src/mcp/**"]
+severity = "error"
+
+# Harness loaders resolve imports lexically against a linked path, so an
+# integration that imports src/ fails to load inside pi/omp/opencode.
+[[architecture.rules]]
+name = "integrations-are-self-contained"
+source = "integrations/**"
+deny = [
+  "src/audit/**",
+  "src/cli/**",
+  "src/core/**",
+  "src/eval/**",
+  "src/mcp/**",
+  "src/question-packs/**",
+  "src/replay/**",
+]
+severity = "error"
