@@ -79,6 +79,7 @@ these as text, never guesses.
 | Module | Service | Responsibility |
 |---|---|---|
 | `core/client.ts` | `JevClient` | Ask TypeSafe, map wire format (`type`) to the internal dialect (`_tag`), log every call |
+| `core/call-log.ts` | — | The one call-event writer both transports share (`callLogger`), so fetch and SDK calls log the same fields |
 | `core/events.ts` | `EventLog` | Append/read the JSONL log; malformed lines are skipped |
 | `core/metrics.ts` | `serveMeter` | Read the log, render Prometheus text on `127.0.0.1:8788` |
 | `core/loops.ts` | `LoopGuard` | Fingerprint failures, count repeats, prune after 24h, escalate once at the third |

@@ -5,16 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { callLogger } from "./call-log.ts";
 import { EventLog, type EventLogService } from "./events.ts";
-import type {
-  Answer,
-  AnswerMap,
-  CallEvent,
-  Harness,
-  JevErrorTag,
-  Question,
-  QuestionMap,
-} from "./schema.ts";
+import type { Answer, AnswerMap, Harness, Question, QuestionMap } from "./schema.ts";
 
 export const DEFAULT_MODEL = "jev-latest";
 const TIMEOUT = "120 seconds";
@@ -208,22 +201,6 @@ export interface JevClientConfig {
   readonly transport: JevTransport;
 }
 
-interface CallLogFields {
-  readonly status: "ok" | "error";
-  readonly latencyMs: number;
-  readonly model: string;
-  readonly error?: string;
-  /** Typed failure kind; text descriptions change, tags do not. */
-  readonly errorTag?: JevErrorTag;
-  readonly answers?: AnswerMap;
-  readonly tokens?: { readonly input: number; readonly output: number };
-}
-
-const summarizeQuestions = (
-  questions: QuestionMap,
-): ReadonlyArray<{ readonly id: string; readonly type: "choice" | "noul" | "score" }> =>
-  Object.entries(questions).map(([id, question]) => ({ id, type: question._tag }));
-
 export const describeJevError = (error: JevError): string =>
   error._tag === "JevApiError" ? `TypeSafe API error ${error.status}` : error._tag;
 
@@ -232,26 +209,7 @@ export function makeJevClient(
 ): JevClientService {
   const { apiKey, transport, log } = config;
 
-  // Event logging must never fail a judgment call.
-  const logCall = (input: AskInput, fields: CallLogFields): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const event: CallEvent = {
-        _tag: "call",
-        ts: new Date(now).toISOString(),
-        harness: input.harness,
-        model: fields.model,
-        latencyMs: fields.latencyMs,
-        status: fields.status,
-        sessionID: input.sessionID,
-        error: fields.error,
-        errorTag: fields.errorTag,
-        answers: fields.answers,
-        tokens: fields.tokens,
-        questions: summarizeQuestions(input.questions),
-      };
-      yield* log.append(event);
-    }).pipe(Effect.orElseSucceed(() => undefined));
+  const logCall = callLogger(log);
 
   const ask = (input: AskInput): Effect.Effect<AskResult, JevError> =>
     Effect.gen(function* () {

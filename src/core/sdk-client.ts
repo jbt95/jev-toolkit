@@ -38,8 +38,9 @@ import {
   type JevClientService,
   type JevError,
 } from "./client.ts";
+import { callLogger } from "./call-log.ts";
 import { EventLog, type EventLogService } from "./events.ts";
-import type { AnswerMap, CallEvent, QuestionMap } from "./schema.ts";
+import type { AnswerMap, QuestionMap } from "./schema.ts";
 
 export interface SdkClientConfig {
   readonly apiKey: Option.Option<string>;
@@ -135,20 +136,6 @@ interface SdkClientOptions {
   readonly fetch?: Fetch;
 }
 
-interface CallLogFields {
-  readonly status: "ok" | "error";
-  readonly latencyMs: number;
-  readonly model: string;
-  readonly error?: string;
-  readonly answers?: AnswerMap;
-  readonly tokens?: { readonly input: number; readonly output: number };
-}
-
-const summarizeQuestions = (
-  questions: QuestionMap,
-): ReadonlyArray<{ readonly id: string; readonly type: "choice" | "noul" | "score" }> =>
-  Object.entries(questions).map(([id, question]) => ({ id, type: question._tag }));
-
 const mapSdkFailure = (cause: unknown): JevError => {
   if (cause instanceof APIError) return new JevApiError({ status: cause.status });
   if (cause instanceof APITimeoutError) return new JevTimeoutError();
@@ -159,26 +146,7 @@ const mapSdkFailure = (cause: unknown): JevError => {
 
 export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
   const { apiKey, log } = config;
-
-  // Event logging must never fail a judgment call.
-  const logCall = (input: AskInput, fields: CallLogFields): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const event: CallEvent = {
-        _tag: "call",
-        ts: new Date(now).toISOString(),
-        harness: input.harness,
-        model: fields.model,
-        latencyMs: fields.latencyMs,
-        status: fields.status,
-        sessionID: input.sessionID,
-        error: fields.error,
-        answers: fields.answers,
-        tokens: fields.tokens,
-        questions: summarizeQuestions(input.questions),
-      };
-      yield* log.append(event);
-    }).pipe(Effect.orElseSucceed(() => undefined));
+  const logCall = callLogger(log);
 
   const ask = (input: AskInput): Effect.Effect<AskResult, JevError> =>
     Effect.gen(function* () {
@@ -191,6 +159,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           latencyMs: 0,
           model,
           error: "TYPESAFE_API_KEY is not set; export it where the harness process can see it.",
+          errorTag: "JevConfigError",
         });
         return yield* Effect.fail(new JevConfigError());
       }
@@ -202,6 +171,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           latencyMs: 0,
           model,
           error: "TypeSafe request did not contain valid questions",
+          errorTag: "JevDecodeError",
         });
         return yield* Effect.fail(new JevDecodeError());
       }
@@ -226,6 +196,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           latencyMs: 0,
           model,
           error: describeJevError(built.failure),
+          errorTag: built.failure._tag,
         });
         return yield* Effect.fail(built.failure);
       }
@@ -248,6 +219,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           latencyMs,
           model,
           error: describeJevError(outcome.failure),
+          errorTag: outcome.failure._tag,
         });
         return yield* Effect.fail(outcome.failure);
       }
@@ -269,6 +241,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           latencyMs,
           model,
           error: "TypeSafe response did not answer the requested questions",
+          errorTag: "JevDecodeError",
         });
         return yield* Effect.fail(new JevDecodeError());
       }

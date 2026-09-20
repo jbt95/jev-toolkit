@@ -119,6 +119,12 @@ describe("makeSdkJevClient", () => {
     if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("JevApiError");
     const events = await Effect.runPromise(log.read());
     expect(events).toHaveLength(1);
+    const first = events[0];
+    if (first?._tag !== "call") throw new Error("expected a call event");
+    expect(first.status).toBe("error");
+    // The SDK transport is the CLI default; its failures must stay countable
+    // by reason, not fall into the metric's unknown bucket.
+    expect(first.errorTag).toBe("JevApiError");
   });
 
   it("fails with JevConfigError when the API key is missing", async () => {
