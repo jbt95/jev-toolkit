@@ -158,6 +158,24 @@ const scoreMatches = (question: ScoreQuestion, answer: Answer): boolean => {
  * every requested question is answered with its own primitive, a choice from
  * its criteria, and bounded numbers. Anything else must fail closed.
  */
+/**
+ * True when every requested question has an answer of the matching shape. Both
+ * transports gate on this before returning, so a partial response never looks
+ * like a judgment.
+ */
+export const answersCoverQuestions = (questions: QuestionMap, answers: AnswerMap): boolean => {
+  const requested = Object.entries(questions);
+  const answered = Object.keys(answers);
+  return (
+    answered.length === requested.length &&
+    requested.every(([id, question]) =>
+      Option.fromUndefinedOr(answers[id]).pipe(
+        Option.exists((answer) => answerMatchesQuestion(question, answer)),
+      ),
+    )
+  );
+};
+
 export const answerMatchesQuestion = (question: Question, answer: Answer): boolean => {
   switch (question._tag) {
     case "noul":
@@ -263,16 +281,7 @@ export function makeJevClient(
       const answers: AnswerMap = Object.fromEntries(
         Object.entries(decoded.success.answers).map(([id, answer]) => [id, toAnswer(answer)]),
       );
-      const requested = Object.entries(input.questions);
-      const answered = Object.keys(decoded.success.answers);
-      const consistent =
-        answered.length === requested.length &&
-        requested.every(([id, question]) =>
-          Option.fromUndefinedOr(answers[id]).pipe(
-            Option.exists((answer) => answerMatchesQuestion(question, answer)),
-          ),
-        );
-      if (!consistent) {
+      if (!answersCoverQuestions(input.questions, answers)) {
         yield* logCall(input, {
           status: "error",
           latencyMs,

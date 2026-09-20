@@ -31,7 +31,7 @@ import {
   JevDecodeError,
   JevTimeoutError,
   JevTransportError,
-  answerMatchesQuestion,
+  answersCoverQuestions,
   describeJevError,
   type AskInput,
   type AskResult,
@@ -136,7 +136,8 @@ interface SdkClientOptions {
   readonly fetch?: Fetch;
 }
 
-const mapSdkFailure = (cause: unknown): JevError => {
+/** SDK failure classes to the shared Jev error tags; exported for its table test. */
+export const mapSdkFailure = (cause: unknown): JevError => {
   if (cause instanceof APIError) return new JevApiError({ status: cause.status });
   if (cause instanceof APITimeoutError) return new JevTimeoutError();
   if (cause instanceof APIConnectionError) return new JevTransportError();
@@ -226,16 +227,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
       const response = outcome.success;
 
       const answers = toInternalAnswers(response.answers);
-      const requested = Object.entries(input.questions);
-      const answered = Object.keys(response.answers);
-      const consistent =
-        answered.length === requested.length &&
-        requested.every(([id, question]) =>
-          Option.fromUndefinedOr(answers[id]).pipe(
-            Option.exists((answer) => answerMatchesQuestion(question, answer)),
-          ),
-        );
-      if (!consistent) {
+      if (!answersCoverQuestions(input.questions, answers)) {
         yield* logCall(input, {
           status: "error",
           latencyMs,

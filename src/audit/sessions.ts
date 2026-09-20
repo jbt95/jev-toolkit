@@ -7,8 +7,13 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { isNotFoundError } from "../core/fs-errors.ts";
 import { Harness, SessionTokens } from "../core/schema.ts";
+import {
+  parsePiOmpLines,
+  readSessionRoot,
+  sessionIDFromFile,
+  type PiOmpEntry,
+} from "./session-files.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 
 export class SessionAuditError extends Data.TaggedError("SessionAuditError")<{
@@ -303,39 +308,6 @@ export function digestOpencode(
   });
 }
 
-const PiEntry = Schema.Struct({
-  type: Schema.String,
-  id: Schema.optional(Schema.String),
-  timestamp: Schema.optional(Schema.String),
-  parentSession: Schema.optional(Schema.String),
-  message: Schema.optional(
-    Schema.Struct({
-      role: Schema.optional(Schema.String),
-      content: Schema.Array(ContentItem),
-      isError: Schema.optional(Schema.Boolean),
-      stopReason: Schema.optional(Schema.String),
-      usage: Schema.optional(
-        Schema.Struct({
-          input: Schema.Number,
-          output: Schema.Number,
-          cacheRead: Schema.Number,
-          cacheWrite: Schema.Number,
-          cost: Schema.optional(Schema.Struct({ total: Schema.Number })),
-        }),
-      ),
-    }),
-  ),
-});
-type PiEntry = Schema.Schema.Type<typeof PiEntry>;
-const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
-
-/** Session files are named `<timestamp>_<session id>.jsonl`; keep the id. */
-export const sessionIDFromFile = (path: string): string => {
-  const base = basename(path, ".jsonl");
-  const separator = base.indexOf("_");
-  return separator < 0 ? base : base.slice(separator + 1);
-};
-
 /** Sum one assistant turn's model usage into the draft. */
 const accumulateUsage = (
   draft: DigestDraft,
@@ -355,31 +327,47 @@ const accumulateUsage = (
   draft.costUsd += usage.cost?.total ?? 0;
 };
 
-const accumulatePi = (draft: DigestDraft, entry: PiEntry, sinceIso: string): void => {
+type PiMessage = NonNullable<PiOmpEntry["message"]>;
+
+/** Assistant turns carry tools, usage, and the reason the turn ended. */
+const accumulateAssistant = (draft: DigestDraft, message: PiMessage): void => {
+  draft.assistantTurns += 1;
+  countTools(message.content, draft.toolCounts, "toolCall");
+  for (const item of message.content) {
+    if (item.is_error === true) draft.errorCount += 1;
+  }
+  const usage = Option.fromUndefinedOr(message.usage);
+  if (Option.isSome(usage)) accumulateUsage(draft, usage.value);
+  const stopReason = Option.fromUndefinedOr(message.stopReason);
+  if (Option.isSome(stopReason)) {
+    draft.stopReasons[stopReason.value] = (draft.stopReasons[stopReason.value] ?? 0) + 1;
+  }
+};
+
+/** Tool results report failure on the message, not on a content part. */
+const accumulateToolResult = (draft: DigestDraft, message: PiMessage): void => {
+  if (message.isError === true) draft.errorCount += 1;
+};
+
+const accumulatePi = (draft: DigestDraft, entry: PiOmpEntry, sinceIso: string): void => {
   recordStartedAt(draft, entry.timestamp);
   if (isTooOld(entry.timestamp, sinceIso)) return;
+  if (entry.type !== "message") return;
   const message = Option.fromUndefinedOr(entry.message);
-  if (entry.type !== "message" || Option.isNone(message)) return;
-  if (message.value.role === "assistant") {
-    draft.assistantTurns += 1;
-    countTools(message.value.content, draft.toolCounts, "toolCall");
-    for (const item of message.value.content) {
-      if (item.is_error === true) draft.errorCount += 1;
-    }
-    const usage = Option.fromUndefinedOr(message.value.usage);
-    if (Option.isSome(usage)) accumulateUsage(draft, usage.value);
-    const stopReason = Option.fromUndefinedOr(message.value.stopReason);
-    if (Option.isSome(stopReason)) {
-      draft.stopReasons[stopReason.value] = (draft.stopReasons[stopReason.value] ?? 0) + 1;
-    }
-    return;
+  if (Option.isNone(message)) return;
+  switch (message.value.role) {
+    case "assistant":
+      accumulateAssistant(draft, message.value);
+      return;
+    case "toolResult":
+      accumulateToolResult(draft, message.value);
+      return;
+    case "user":
+      recordPrompt(draft, textOf(message.value.content));
+      return;
+    default:
+      return;
   }
-  if (message.value.role === "toolResult") {
-    if (message.value.isError === true) draft.errorCount += 1;
-    return;
-  }
-  if (message.value.role !== "user") return;
-  recordPrompt(draft, textOf(message.value.content));
 };
 
 const digestPiOmpText = (
@@ -390,18 +378,11 @@ const digestPiOmpText = (
 ): Option.Option<SessionDigest> => {
   const draft = newDraft();
   let sessionID = sessionIDFromFile(file);
-  for (const line of raw.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const decoded = decodePiEntry(line);
-    if (Option.isNone(decoded)) continue;
-    const entry = decoded.value;
-    const session = Option.fromUndefinedOr(entry.id);
-    if (entry.type === "session") {
-      if (Option.isSome(session)) sessionID = session.value;
-      const parent = Option.fromUndefinedOr(entry.parentSession);
-      if (Option.isSome(parent)) draft.parentSessionID = sessionIDFromFile(parent.value);
-    }
-    accumulatePi(draft, entry, sinceIso);
+  for (const line of parsePiOmpLines(file, raw)) {
+    sessionID = line.sessionID;
+    const parent = Option.fromUndefinedOr(line.parentSessionID);
+    if (Option.isSome(parent)) draft.parentSessionID = parent.value;
+    accumulatePi(draft, line.entry, sinceIso);
   }
   return draftDigest(harness, sessionID, draft);
 };
@@ -413,23 +394,8 @@ export function digestPiOmp(
   return Effect.gen(function* () {
     const digests: Array<SessionDigest> = [];
     for (const { harness, root } of roots) {
-      const files = yield* Effect.tryPromise({
-        try: () => listJsonl(root),
-        catch: (cause) => cause,
-      }).pipe(
-        // A harness that was never used has no sessions dir; other failures must surface.
-        Effect.catchIf(isNotFoundError, () => Effect.succeed([])),
-        Effect.mapError(() => new SessionAuditError({ source: harness })),
-      );
-      for (const file of files) {
-        const raw = yield* Effect.tryPromise({
-          try: () => readFile(file, "utf8"),
-          catch: (cause) => cause,
-        }).pipe(
-          // A file that vanished mid-scan contributes nothing; keep other errors loud.
-          Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
-          Effect.mapError(() => new SessionAuditError({ source: harness })),
-        );
+      const sessions = yield* readSessionRoot(root, (source) => new SessionAuditError({ source }));
+      for (const { file, raw } of sessions) {
         const digest = digestPiOmpText(harness, file, raw, sinceIso);
         if (Option.isSome(digest)) digests.push(digest.value);
       }

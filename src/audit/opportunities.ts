@@ -2,15 +2,19 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { existsSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { matchQuantitativeClaim } from "../core/detector.ts";
-import { isNotFoundError } from "../core/fs-errors.ts";
 import { Harness, type ClaimKind } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
-import { sessionIDFromFile } from "./sessions.ts";
+import {
+  assistantMessages,
+  listJsonlFiles,
+  parsePiOmpLines,
+  readSessionRoot,
+} from "./session-files.ts";
 
 export class AuditError extends Data.TaggedError("AuditError")<{ readonly source: string }> {}
 
@@ -112,16 +116,6 @@ const ClaudeEntry = Schema.Struct({
 });
 const decodeClaudeEntry = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudeEntry));
 
-const PiEntry = Schema.Struct({
-  type: Schema.String,
-  id: Schema.optional(Schema.String),
-  timestamp: Schema.optional(Schema.String),
-  message: Schema.optional(
-    Schema.Struct({ role: Schema.optional(Schema.String), content: Schema.Array(ContentItem) }),
-  ),
-});
-const decodePiEntry = Schema.decodeUnknownOption(Schema.fromJsonString(PiEntry));
-
 const OpencodeContentMessage = Schema.Struct({ content: Schema.Array(ContentItem) });
 const OpencodeTextMessage = Schema.Struct({ text: Schema.String });
 const decodeOpencodeContent = Schema.decodeUnknownOption(
@@ -142,11 +136,6 @@ const OpencodeRow = Schema.Struct({
   data: Schema.String,
 });
 const decodeRow = Schema.decodeUnknownOption(OpencodeRow);
-
-const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
-  const entries = await readdir(root, { recursive: true });
-  return entries.filter((entry) => entry.endsWith(".jsonl")).map((entry) => join(root, entry));
-};
 
 const textOf = (content: ReadonlyArray<{ readonly text?: string }>): string =>
   content.flatMap((item) => Option.toArray(Option.fromUndefinedOr(item.text))).join("\n");
@@ -236,7 +225,7 @@ export function extractClaude(
   return Effect.tryPromise({
     try: async () => {
       const messages: Array<RawMessage> = [];
-      for (const file of await listJsonl(root)) {
+      for (const file of await listJsonlFiles(root)) {
         const raw = await readFile(file, "utf8");
         messages.push(...claudeMessages(basename(file, ".jsonl"), raw, sinceIso));
       }
@@ -253,30 +242,15 @@ const piOmpMessages = (
   sinceIso: string,
 ): ReadonlyArray<RawMessage> => {
   const messages: Array<RawMessage> = [];
-  let sessionID = sessionIDFromFile(file);
-  for (const line of raw.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const decoded = decodePiEntry(line);
-    if (Option.isNone(decoded)) continue;
-    const entry = decoded.value;
-    const session = Option.fromUndefinedOr(entry.id);
-    if (entry.type === "session" && Option.isSome(session)) sessionID = session.value;
-    const message = Option.fromUndefinedOr(entry.message);
-    if (entry.type !== "message" || Option.isNone(message)) continue;
-    if (message.value.role !== "assistant") continue;
-    const tooOld = Option.fromUndefinedOr(entry.timestamp).pipe(
-      Option.map((timestamp) => timestamp < sinceIso),
-      Option.getOrElse(() => false),
-    );
-    if (tooOld) continue;
+  for (const turn of assistantMessages(parsePiOmpLines(file, raw), sinceIso)) {
     messages.push(
       ...Option.toArray(
         messageFromText(
           harness,
-          sessionID,
+          turn.sessionID,
           "assistant_message",
-          Option.getOrElse(Option.fromUndefinedOr(entry.timestamp), () => ""),
-          textOf(message.value.content),
+          turn.timestamp,
+          textOf(turn.message.content),
         ),
       ),
     );
@@ -291,23 +265,8 @@ export function extractPiOmp(
   return Effect.gen(function* () {
     const messages: Array<RawMessage> = [];
     for (const { harness, root } of roots) {
-      const files = yield* Effect.tryPromise({
-        try: () => listJsonl(root),
-        catch: (cause) => cause,
-      }).pipe(
-        // A harness that was never used has no sessions dir; other failures must surface.
-        Effect.catchIf(isNotFoundError, () => Effect.succeed([])),
-        Effect.mapError(() => new AuditError({ source: harness })),
-      );
-      for (const file of files) {
-        const raw = yield* Effect.tryPromise({
-          try: () => readFile(file, "utf8"),
-          catch: (cause) => cause,
-        }).pipe(
-          // A file that vanished mid-scan contributes nothing; keep other errors loud.
-          Effect.catchIf(isNotFoundError, () => Effect.succeed("")),
-          Effect.mapError(() => new AuditError({ source: harness })),
-        );
+      const sessions = yield* readSessionRoot(root, (source) => new AuditError({ source }));
+      for (const { file, raw } of sessions) {
         messages.push(...piOmpMessages(harness, file, raw, sinceIso));
       }
     }

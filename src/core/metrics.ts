@@ -93,6 +93,32 @@ const histogramLines = (
 const sorted = <T>(map: ReadonlyMap<string, T>): ReadonlyArray<readonly [string, T]> =>
   [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+/**
+ * A counter or gauge family over a `label|label` keyed map: the key splits into
+ * label values in order and the map value becomes the sample. Families that
+ * emit more than one line per key (calls, tokens, opportunities) stay explicit.
+ */
+const keyedFamily = (
+  name: string,
+  help: string,
+  type: "counter" | "gauge",
+  labels: ReadonlyArray<string>,
+  values: ReadonlyMap<string, number>,
+  scale?: (value: number) => number,
+): MetricFamily => ({
+  name,
+  help,
+  type,
+  lines: sorted(values).map(([key, value]) => {
+    const parts = key.split("|");
+    return sample(
+      name,
+      labels.map((label, index) => [label, parts[index] ?? ""] as const),
+      scale === undefined ? value : scale(value),
+    );
+  }),
+});
+
 /** Composite metric keys are `primary|secondary`; split them back into labels. */
 const splitKey = (key: string): readonly [string, string] => {
   const separator = key.indexOf("|");
@@ -519,14 +545,7 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         );
       }),
     },
-    {
-      name: "jev_triage_total",
-      help: "Triage runs by feature.",
-      type: "counter",
-      lines: sorted(triage).map(([feature, count]) =>
-        sample("jev_triage_total", [["feature", feature]], count),
-      ),
-    },
+    keyedFamily("jev_triage_total", "Triage runs by feature.", "counter", ["feature"], triage),
     {
       name: "jev_latency_seconds",
       help: "Jev call latency in seconds, by harness.",
@@ -569,54 +588,27 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         ),
       ),
     },
-    {
-      name: "jev_call_errors_total",
-      help: "Failed calls by harness and typed failure tag; unknown covers pre-tag events.",
-      type: "counter",
-      lines: sorted(callErrors).map(([key, count]) => {
-        const [harness = "", reason = ""] = key.split("|");
-        return sample(
-          "jev_call_errors_total",
-          [
-            ["harness", harness],
-            ["reason", reason],
-          ],
-          count,
-        );
-      }),
-    },
-    {
-      name: "jev_sessions_total",
-      help: "Labeled sessions by harness and outcome.",
-      type: "counter",
-      lines: sorted(sessionOutcomes).map(([key, count]) => {
-        const [harness = "", outcome = ""] = key.split("|");
-        return sample(
-          "jev_sessions_total",
-          [
-            ["harness", harness],
-            ["outcome", outcome],
-          ],
-          count,
-        );
-      }),
-    },
-    {
-      name: "jev_waste_total",
-      help: "Labeled sessions by dominant waste pattern.",
-      type: "counter",
-      lines: sorted(sessionWaste).map(([key, count]) => {
-        const [harness = "", pattern = ""] = key.split("|");
-        return sample(
-          "jev_waste_total",
-          [
-            ["harness", harness],
-            ["pattern", pattern],
-          ],
-          count,
-        );
-      }),
-    },
+    keyedFamily(
+      "jev_call_errors_total",
+      "Failed calls by harness and typed failure tag; unknown covers pre-tag events.",
+      "counter",
+      ["harness", "reason"],
+      callErrors,
+    ),
+    keyedFamily(
+      "jev_sessions_total",
+      "Labeled sessions by harness and outcome.",
+      "counter",
+      ["harness", "outcome"],
+      sessionOutcomes,
+    ),
+    keyedFamily(
+      "jev_waste_total",
+      "Labeled sessions by dominant waste pattern.",
+      "counter",
+      ["harness", "pattern"],
+      sessionWaste,
+    ),
     {
       name: "jev_session_friction",
       help: "Session friction distribution by harness.",
@@ -631,62 +623,42 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         ),
       ),
     },
-    {
-      name: "jev_session_cost_usd",
-      help: "Summed agent session cost in USD by harness, from the latest label per session.",
-      type: "gauge",
-      lines: sorted(sessionCost).map(([harness, total]) =>
-        sample("jev_session_cost_usd", [["harness", harness]], round(total)),
-      ),
-    },
-    {
-      name: "jev_session_tokens_total",
-      help: "Agent model tokens summed over labeled sessions by harness and kind.",
-      type: "counter",
-      lines: sorted(sessionTokens).map(([key, total]) => {
-        const [harness = "", kind = ""] = key.split("|");
-        return sample(
-          "jev_session_tokens_total",
-          [
-            ["harness", harness],
-            ["kind", kind],
-          ],
-          total,
-        );
-      }),
-    },
-    {
-      name: "jev_session_tool_errors_total",
-      help: "Tool errors reported by the harness, summed over labeled sessions.",
-      type: "counter",
-      lines: sorted(sessionToolErrors).map(([harness, total]) =>
-        sample("jev_session_tool_errors_total", [["harness", harness]], total),
-      ),
-    },
-    {
-      name: "jev_session_stop_reasons_total",
-      help: "Turn endings by stop reason over labeled sessions; length/error/aborted mean unfinished work.",
-      type: "counter",
-      lines: sorted(sessionStopReasons).map(([key, total]) => {
-        const [harness = "", reason = ""] = key.split("|");
-        return sample(
-          "jev_session_stop_reasons_total",
-          [
-            ["harness", harness],
-            ["reason", reason],
-          ],
-          total,
-        );
-      }),
-    },
-    {
-      name: "jev_reviews_total",
-      help: "Quality review runs by harness.",
-      type: "counter",
-      lines: sorted(reviews).map(([harness, count]) =>
-        sample("jev_reviews_total", [["harness", harness]], count),
-      ),
-    },
+    keyedFamily(
+      "jev_session_cost_usd",
+      "Summed agent session cost in USD by harness, from the latest label per session.",
+      "gauge",
+      ["harness"],
+      sessionCost,
+      round,
+    ),
+    keyedFamily(
+      "jev_session_tokens_total",
+      "Agent model tokens summed over labeled sessions by harness and kind.",
+      "counter",
+      ["harness", "kind"],
+      sessionTokens,
+    ),
+    keyedFamily(
+      "jev_session_tool_errors_total",
+      "Tool errors reported by the harness, summed over labeled sessions.",
+      "counter",
+      ["harness"],
+      sessionToolErrors,
+    ),
+    keyedFamily(
+      "jev_session_stop_reasons_total",
+      "Turn endings by stop reason over labeled sessions; length/error/aborted mean unfinished work.",
+      "counter",
+      ["harness", "reason"],
+      sessionStopReasons,
+    ),
+    keyedFamily(
+      "jev_reviews_total",
+      "Quality review runs by harness.",
+      "counter",
+      ["harness"],
+      reviews,
+    ),
     {
       name: "jev_review_score",
       help: "Mean applicable review score (normalized 0-1) by dimension and harness.",
@@ -703,22 +675,13 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         );
       }),
     },
-    {
-      name: "jev_review_direction_total",
-      help: "Recorded review directions by harness.",
-      type: "counter",
-      lines: sorted(reviewDirections).map(([key, count]) => {
-        const [harness, direction] = splitKey(key);
-        return sample(
-          "jev_review_direction_total",
-          [
-            ["harness", harness],
-            ["direction", direction],
-          ],
-          count,
-        );
-      }),
-    },
+    keyedFamily(
+      "jev_review_direction_total",
+      "Recorded review directions by harness.",
+      "counter",
+      ["harness", "direction"],
+      reviewDirections,
+    ),
   ];
 
   if (health !== undefined) families.push(...healthFamilies(health));
