@@ -92,6 +92,19 @@ const isTooOld = (timestamp: string | undefined, sinceIso: string): boolean =>
     Option.getOrElse(() => false),
   );
 
+/** Facts that only some harnesses record; each appears only when observed. */
+const recordedFacts = (draft: DigestDraft): Partial<SessionDigest> => ({
+  tokens: draft.usageSeen ? { ...draft.tokens } : undefined,
+  stopReasons: Object.keys(draft.stopReasons).length > 0 ? draft.stopReasons : undefined,
+  parentSessionID: draft.parentSessionID === "" ? undefined : draft.parentSessionID,
+});
+
+/** A session-row cost (opencode) beats summed per-turn cost when both exist. */
+const preferredCost = (draft: DigestDraft, costUsd: number | undefined): number | undefined => {
+  if (costUsd !== undefined && costUsd > 0) return costUsd;
+  return draft.usageSeen ? draft.costUsd : undefined;
+};
+
 const draftDigest = (
   harness: Harness,
   sessionID: string,
@@ -99,9 +112,6 @@ const draftDigest = (
   costUsd?: number,
 ): Option.Option<SessionDigest> => {
   if (draft.assistantTurns === 0 && draft.userPrompts.length === 0) return Option.none();
-  // A session-row cost (opencode) beats summed per-turn cost when both exist.
-  const summedCost = draft.usageSeen ? draft.costUsd : undefined;
-  const totalCost = costUsd === undefined || costUsd === 0 ? summedCost : costUsd;
   return Option.some({
     harness,
     sessionID,
@@ -110,10 +120,8 @@ const draftDigest = (
     assistantTurns: draft.assistantTurns,
     toolCounts: draft.toolCounts,
     errorCount: draft.errorCount,
-    tokens: draft.usageSeen ? { ...draft.tokens } : undefined,
-    stopReasons: Object.keys(draft.stopReasons).length > 0 ? draft.stopReasons : undefined,
-    costUsd: totalCost,
-    parentSessionID: draft.parentSessionID === "" ? undefined : draft.parentSessionID,
+    ...recordedFacts(draft),
+    costUsd: preferredCost(draft, costUsd),
   });
 };
 

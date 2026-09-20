@@ -612,6 +612,19 @@ const detectAuditClaims = (
     return detected;
   });
 
+/** Add one call's question ids to a session's list, keeping order and uniqueness. */
+const mergeQuestions = (
+  sessionQuestions: Map<string, Array<string>>,
+  key: string,
+  questions: ReadonlyArray<{ readonly id: string }>,
+): void => {
+  const list = sessionQuestions.get(key) ?? [];
+  for (const question of questions) {
+    if (!list.includes(question.id)) list.push(question.id);
+  }
+  sessionQuestions.set(key, list);
+};
+
 const buildSessionQuestions = (
   events: ReadonlyArray<JevEvent>,
   inferredSessions: ReadonlyMap<string, ReadonlyArray<string>>,
@@ -634,12 +647,7 @@ const buildSessionQuestions = (
   for (const event of events) {
     if (event._tag !== "call") continue;
     for (const sessionID of creditsFor(event)) {
-      const key = `${event.harness}|${sessionID}`;
-      const list = sessionQuestions.get(key) ?? [];
-      for (const question of event.questions) {
-        if (!list.includes(question.id)) list.push(question.id);
-      }
-      sessionQuestions.set(key, list);
+      mergeQuestions(sessionQuestions, `${event.harness}|${sessionID}`, event.questions);
     }
   }
   return sessionQuestions;

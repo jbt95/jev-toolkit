@@ -337,7 +337,8 @@ const finalizeSessionLabels = (acc: EventAccumulator): void => {
 };
 
 /** Health families report what the meter knows about its own input and age. */
-const healthFamilies = (health: MeterHealth): ReadonlyArray<MetricFamily> => {
+const healthFamilies = (health: MeterHealth | undefined): ReadonlyArray<MetricFamily> => {
+  if (health === undefined) return [];
   const lastEventSeconds = Option.fromUndefinedOr(health.stats.lastEventTs).pipe(
     Option.map((ts) => Date.parse(ts)),
     Option.filter((ms) => Number.isFinite(ms)),
@@ -684,7 +685,7 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
     ),
   ];
 
-  if (health !== undefined) families.push(...healthFamilies(health));
+  families.push(...healthFamilies(health));
 
   return { families };
 }

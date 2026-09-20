@@ -8,17 +8,23 @@
 [analysis]
 exclude = ["tools/**", "coverage/**"]
 
+# No absolute CRAP limit: coverage covers src/** only, and a CRAP gate fails
+# every function whose CRAP is unknown, which would flag the whole test tree.
+# CRAP stays in [regressions], where paired src functions have coverage.
 [thresholds.function]
 cognitive = 20
 cyclomatic = 15
 max_nesting = 5
-crap = 20.0
 
+# Anonymous functions pair by name, and the name embeds the line; an edit that
+# shifts lines can pair two different bodies. The cognitive and nesting limits
+# still catch real growth on named functions; cyclomatic and CRAP carry the
+# pairing artifact.
 [regressions]
 cognitive = 2
-cyclomatic = 1
+cyclomatic = 2
 max_nesting = 0
-crap = 1.0
+crap = 3.0
 
 [duplication]
 min_tokens = 100

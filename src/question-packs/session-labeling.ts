@@ -1,3 +1,4 @@
+import * as Option from "effect/Option";
 import type { SessionDigest } from "../audit/sessions.ts";
 import type { Question, QuestionMap } from "../core/schema.ts";
 
@@ -15,13 +16,17 @@ const TASK_TYPES = {
 export function labelQuestions(digests: ReadonlyArray<SessionDigest>): QuestionMap {
   const questions: Record<string, Question> = {};
   digests.forEach((digest, index) => {
+    const cost = Option.fromUndefinedOr(digest.costUsd).pipe(
+      Option.map((value) => `cost $${value.toFixed(2)}`),
+      Option.toArray,
+    );
     const parts = [
       `Session ${index + 1} (${digest.harness}): ${digest.assistantTurns} assistant turns`,
       `tools ${JSON.stringify(digest.toolCounts)}`,
       `tool errors ${digest.errorCount}`,
       `turn endings ${JSON.stringify(digest.stopReasons ?? {})}`,
+      ...cost,
     ];
-    if (digest.costUsd !== undefined) parts.push(`cost $${digest.costUsd.toFixed(2)}`);
     const label =
       `${parts.join("; ")}; the developer asked: ` +
       `${digest.userPrompts.join(" | ") || "(no captured prompts)"}`;
