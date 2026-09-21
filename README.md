@@ -2,8 +2,8 @@
 
 MCP-first toolkit for [TypeSafe/Jev](https://docs.typesafe.ai) — the System
 One decision model. One stdio server (`jev mcp`) serves any MCP-capable
-harness, backed by one local event log and Prometheus impact metrics on the
-existing Grafana stack.
+harness, backed by one local event log and Prometheus impact metrics you can
+scrape into your own Grafana.
 
 Built as an **Effect** codebase (v4 RC): services with Layers, typed errors,
 Schema-validated boundaries, no runtime dependencies besides `effect`.
@@ -128,7 +128,7 @@ tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
 launchd/            always-on meter + nightly label/audit plists
 scripts/            install.sh · install-dashboard.sh · check-metrics.sh · nightly.sh · smoke-*.sh
-tools/oxlint/       vendored anti-slop rule groups (see License)
+tools/oxlint/       anti-slop rule groups for the lint gate (see License)
 docs/               this documentation set
 skills-lock.json    dev-time agent skills: source + hashes, fetched locally
 ```
