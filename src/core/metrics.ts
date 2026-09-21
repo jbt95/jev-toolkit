@@ -6,6 +6,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService, EventLogStats } from "./events.ts";
 import type {
   AttributionEvent,
+  RouteEvent,
   CallEvent,
   JevEvent,
   OpportunityEvent,
@@ -129,6 +130,7 @@ const splitKey = (key: string): readonly [string, string] => {
 interface EventAccumulator {
   readonly calls: Map<string, { ok: number; error: number }>;
   readonly callErrors: Map<string, number>;
+  readonly skillRoutes: Map<string, number>;
   readonly tokens: Map<string, { input: number; output: number }>;
   readonly opportunities: Map<string, { matched: number; missed: number }>;
   readonly detectedOpportunities: Map<string, OpportunityEvent>;
@@ -155,6 +157,7 @@ interface EventAccumulator {
 const newAccumulator = (): EventAccumulator => ({
   calls: new Map(),
   callErrors: new Map(),
+  skillRoutes: new Map(),
   tokens: new Map(),
   opportunities: new Map(),
   detectedOpportunities: new Map(),
@@ -222,6 +225,11 @@ const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
       acc.confidence.set(answer._tag, histogram);
     }
   }
+};
+
+/** Skill-routing decisions by outcome: loaded versus declined. */
+const collectRoute = (acc: EventAccumulator, event: RouteEvent): void => {
+  acc.skillRoutes.set(event.outcome, (acc.skillRoutes.get(event.outcome) ?? 0) + 1);
 };
 
 /** A recovered call→session link counts the session as a Jev user. */
@@ -395,6 +403,7 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
     sessionToolErrors,
     sessionWaste,
     sessions,
+    skillRoutes,
     tokens,
     triage,
   } = acc;
@@ -409,6 +418,9 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         break;
       case "attribution":
         collectAttribution(acc, event);
+        break;
+      case "route":
+        collectRoute(acc, event);
         break;
       case "triage":
         triage.set(event.feature, (triage.get(event.feature) ?? 0) + 1);
@@ -659,6 +671,13 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
       "counter",
       ["harness"],
       reviews,
+    ),
+    keyedFamily(
+      "jev_skill_routes_total",
+      "Skill-routing decisions by outcome; decline reasons stay in the log, not in labels.",
+      "counter",
+      ["outcome"],
+      skillRoutes,
     ),
     {
       name: "jev_review_score",

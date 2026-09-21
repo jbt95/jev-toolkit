@@ -154,6 +154,47 @@ describe("metrics", () => {
     );
   });
 
+  it("counts skill-routing decisions by outcome", () => {
+    const routed: ReadonlyArray<JevEvent> = [
+      ...events,
+      {
+        _tag: "route",
+        ts: "2026-09-21T00:00:00.000Z",
+        harness: "omp",
+        outcome: "routed",
+        skill: "debugging",
+        candidates: 37,
+        confidence: 0.97,
+        dependence: 2.4,
+      },
+      {
+        _tag: "route",
+        ts: "2026-09-21T00:01:00.000Z",
+        harness: "omp",
+        outcome: "routed",
+        skill: "plan",
+        candidates: 37,
+        confidence: 0.9,
+        dependence: 3.1,
+      },
+      {
+        _tag: "route",
+        ts: "2026-09-21T00:02:00.000Z",
+        harness: "omp",
+        outcome: "none",
+        reason: "low-dependence",
+        candidates: 37,
+        confidence: 0.52,
+        dependence: 0.7,
+      },
+    ];
+
+    const routedBody = render(collect(routed));
+
+    expect(routedBody).toContain('jev_skill_routes_total{outcome="routed"} 2');
+    expect(routedBody).toContain('jev_skill_routes_total{outcome="none"} 1');
+  });
+
   it("counts attributed sessions as Jev users", () => {
     const attributed: ReadonlyArray<JevEvent> = [
       ...events,

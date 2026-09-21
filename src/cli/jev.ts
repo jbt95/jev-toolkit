@@ -42,6 +42,7 @@ import {
   type LoopGuardService,
 } from "../core/loops.ts";
 import { serveMeter } from "../core/metrics.ts";
+import { readSkillCatalog } from "../core/skills.ts";
 import {
   apiEndpoint,
   claudeProjectsDir,
@@ -62,6 +63,7 @@ import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
 import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
+import { skillRoute, skillRouteQuestions } from "../question-packs/skill-routing.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import { claimDetectionQuestions, detectedClaims } from "../question-packs/claim-detection.ts";
 import {
@@ -101,9 +103,10 @@ commands:
   hook     harness hooks: jev hook prompt [--verify] | jev hook context
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
+  route    pick the skill for a task: jev route skills --task TEXT --skills-dir DIR
   triage   classify failures or review findings: jev triage failure | review
   eval     replay labeled fixtures through a pack: jev eval pack --fixtures FILE
-  mcp      stdio MCP server exposing typesafe_ask, typesafe_verify, typesafe_review
+  mcp      stdio MCP server exposing typesafe_ask, typesafe_verify, typesafe_review, typesafe_skill_route
   meter    serve Prometheus metrics: jev meter serve [--port N]`;
 
 const readStdin = (): Effect.Effect<string, string> =>
@@ -394,6 +397,9 @@ export function runCli(
       }
       case "meter": {
         return yield* runMeter(rest);
+      }
+      case "route": {
+        return yield* runRoute(rest);
       }
       default: {
         yield* Effect.sync(() => {
@@ -1108,6 +1114,117 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       if (verdict.failed.length > 0) console.log(`failed: ${verdict.failed.join(", ")}`);
     });
     return verdict.passed ? 0 : 1;
+  });
+
+const MAX_ROUTE_TASK_CHARS = 4_000;
+
+const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* () {
+    const usage =
+      "usage: jev route skills --task TEXT (--skills FILE | --skills-dir DIR) [--dry-run] [--json]";
+    if (rest[0] !== "skills") {
+      yield* Effect.sync(() => {
+        console.error(usage);
+      });
+      return 1;
+    }
+    const taskFlag = flag(rest, "--task");
+    if (Option.isNone(taskFlag)) {
+      yield* Effect.sync(() => {
+        console.error(usage);
+      });
+      return 1;
+    }
+    const skillsFile = flag(rest, "--skills");
+    const skillsDir = flag(rest, "--skills-dir");
+    const source = Option.isSome(skillsFile)
+      ? { path: skillsFile.value, kind: "file" as const }
+      : Option.match(skillsDir, {
+          onNone: () => undefined,
+          onSome: (path) => ({ path, kind: "dir" as const }),
+        });
+    if (source === undefined) {
+      yield* Effect.sync(() => {
+        console.error("route needs one of --skills FILE or --skills-dir DIR");
+      });
+      return 1;
+    }
+    const dryRun = rest.includes("--dry-run");
+    const asJson = rest.includes("--json");
+    const candidates = yield* readSkillCatalog(source.path, source.kind).pipe(
+      Effect.mapError((error) => `skill catalog failed: ${error.source}`),
+    );
+    if (candidates.length === 0) {
+      yield* Effect.sync(() => {
+        console.error(`no skills found in ${source.path}`);
+      });
+      return 1;
+    }
+
+    const client = yield* JevClient;
+    const log = yield* EventLog;
+    const harness = harnessFromEnv("cli");
+    const input = {
+      task: clip(stripFencedCode(redact(taskFlag.value)), MAX_ROUTE_TASK_CHARS),
+      candidates,
+    };
+    const result = yield* client
+      .ask({
+        harness,
+        state: {
+          task: input.task,
+          skills: candidates.map((candidate) => ({
+            name: candidate.name,
+            description: candidate.description,
+          })),
+        },
+        questions: skillRouteQuestions(input),
+      })
+      .pipe(Effect.mapError(describeJevError));
+    const route = skillRoute(input, result.answers);
+    if (!dryRun) {
+      const eventTime = yield* Clock.currentTimeMillis;
+      yield* log
+        .append({
+          _tag: "route",
+          ts: new Date(eventTime).toISOString(),
+          harness,
+          outcome: route._tag === "routed" ? "routed" : "none",
+          reason: route._tag === "routed" ? undefined : route.reason,
+          skill: route._tag === "routed" ? route.skill : undefined,
+          candidates: candidates.length,
+          confidence: route.confidence,
+          dependence: route.dependence,
+        })
+        .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    }
+    yield* Effect.sync(() => {
+      if (asJson) {
+        console.log(
+          JSON.stringify({
+            decision: route._tag,
+            skill: route._tag === "routed" ? route.skill : null,
+            reason: route._tag === "routed" ? null : route.reason,
+            secondNeeded: route._tag === "routed" ? route.secondNeeded : null,
+            confidence: route.confidence,
+            dependence: route.dependence,
+            candidates: candidates.length,
+            model: result.model,
+          }),
+        );
+        return;
+      }
+      console.log(`jev ${result.model}`);
+      console.log(
+        route._tag === "routed"
+          ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
+          : `load: nothing (${route.reason})`,
+      );
+      console.log(`confidence: ${route.confidence}`);
+      console.log(`dependence: ${route.dependence}`);
+      console.log(`usage: ${result.usage.input} in / ${result.usage.output} out`);
+    });
+    return 0;
   });
 
 const runTriageReview = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>

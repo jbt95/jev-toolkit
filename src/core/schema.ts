@@ -170,6 +170,24 @@ export const AttributionEvent = Schema.TaggedStruct("attribution", {
 });
 export type AttributionEvent = Schema.Schema.Type<typeof AttributionEvent>;
 
+/**
+ * One skill-routing decision: which skill the caller should load for a task, or
+ * why none routed. The task text never enters the log, only the outcome.
+ */
+export const RouteEvent = Schema.TaggedStruct("route", {
+  ...BaseEvent,
+  outcome: Schema.Literals(["routed", "none"]),
+  reason: Schema.optional(
+    Schema.Literals(["no-match", "low-confidence", "low-dependence", "unknown-skill"]),
+  ),
+  /** Chosen skill name when routed; a taxonomy label, never user text. */
+  skill: Schema.optional(Schema.String),
+  candidates: Schema.Number,
+  confidence: Schema.Number,
+  dependence: Schema.Number,
+});
+export type RouteEvent = Schema.Schema.Type<typeof RouteEvent>;
+
 export const JevEvent = Schema.Union([
   CallEvent,
   OpportunityEvent,
@@ -177,5 +195,6 @@ export const JevEvent = Schema.Union([
   SessionLabelEvent,
   ReviewEvent,
   AttributionEvent,
+  RouteEvent,
 ]);
 export type JevEvent = Schema.Schema.Type<typeof JevEvent>;

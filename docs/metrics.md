@@ -49,6 +49,7 @@ query always reflects the current log.
 | `jev_session_tokens_total` | harness, kind | agent tokens (`input`/`output`/`cache_read`/`cache_write`) over labeled sessions |
 | `jev_session_tool_errors_total` | harness | harness-reported tool errors over labeled sessions |
 | `jev_session_stop_reasons_total` | harness, reason | turn endings (`toolUse`/`stop`/`length`/`error`/`aborted`); the last three mean work stopped early |
+| `jev_skill_routes_total` | outcome | skill-routing decisions (`routed`/`none`); decline reasons stay in the log |
 | `jev_reviews_total` | harness | `typesafe_review` runs |
 | `jev_review_score` | dimension, harness | mean applicable review score (normalized 0–1) |
 | `jev_review_direction_total` | harness, direction | before/after directions recorded by reviews with a previous evaluation |
@@ -86,6 +87,9 @@ Notes on semantics:
   (a report a subagent `write`s, for example) are not extracted, so subagent
   sessions that never emit prose contribute no opportunities.
 
+- **Skill routing** counts decisions, not tasks: one `route` event per call, with the
+  chosen skill name in the log and only the outcome in labels, so a new skill never
+  creates a new series.
 - **Coverage** pairs labeled sessions with calls:
   `jev_labeled_sessions_with_calls_total / jev_labeled_sessions_total`, both
   distinct-session counts (re-labeling a session does not inflate the ratio).

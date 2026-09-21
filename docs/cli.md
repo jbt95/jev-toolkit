@@ -12,11 +12,12 @@ jev triage failure --transcript FILE     # pick the failing tool result, then cl
 jev triage review --input findings.json  # route findings: blockers/cosmetic/questions
 jev check commit --message-file FILE     # commit conformance (--spec, --replay built in)
 jev label sessions --since 24h           # outcome / friction / waste per session
+jev route skills --task TEXT --skills-dir DIR   # pick the skill for a task
 jev audit run --since 24h                # detect quantitative claims agents made
 jev audit prompts --since 7d             # measure the live prompt trigger
 jev hook prompt                          # harness hook: print the directive when applicable
 jev eval pack --fixtures FILE            # replay labeled fixtures through a pack
-jev mcp                                  # MCP server: ask + verify + review tools
+jev mcp                                  # MCP server: ask + verify + review + skill route
 jev meter serve [--port 8788]            # Prometheus metrics
 ```
 
@@ -113,6 +114,30 @@ flowchart TD
 Two review-level gates are answered in the same call: `review_substantive`
 (did the review examine the diff) and `truncated` (did it stop mid-verdict).
 A `triage` event with counts is appended.
+
+## route skills — pick the skill for a task
+
+```console
+jev route skills --task "the export button spins forever; find out why and fix it" \
+  --skills-dir ~/.agents/skills [--dry-run] [--json]
+jev route skills --task TEXT --skills FILE      # catalog as JSON: [{name, description}]
+```
+
+```mermaid
+flowchart LR
+  CAT["--skills-dir DIR<br/>SKILL.md front matter<br/>or --skills FILE"] --> Q["Jev: one choice over the catalog<br/>+ second-skill noul + dependence score"]
+  TASK["--task"] --> Q
+  Q --> FLOORS{"confidence ≥ 0.5<br/>and dependence ≥ 2?"}
+  FLOORS -->|yes| LOAD["load: <skill>"]
+  FLOORS -->|no| NONE["load: nothing (reason)"]
+  LOAD & NONE --> EV["route event: outcome · skill · candidates"]
+```
+
+The catalog is the caller's. Jev cannot pick a skill that was not passed, so the
+directory scan reads every `SKILL.md` under `DIR` (front matter `name` and
+`description`; multi-line descriptions are folded). A missing or empty catalog
+exits 1. Decline reasons are `no-match`, `low-confidence`, `low-dependence`, and
+`unknown-skill`; `--dry-run` prints the decision without writing a `route` event.
 
 ## check commit — commit conformance
 

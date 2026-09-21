@@ -51,6 +51,20 @@ const reviewAnswers = (input: AskInput): AnswerMap => {
   return answers;
 };
 
+const routeAnswers = (input: AskInput): AnswerMap => {
+  const answers: Record<string, Answer> = {};
+  for (const id of Object.keys(input.questions)) {
+    if (id === "skill") {
+      answers[id] = { _tag: "choice", choice: "debugging", confidence: 0.97, probabilities: {} };
+    } else if (id === "second") {
+      answers[id] = { _tag: "noul", noul: 0.44 };
+    } else if (id === "dependence") {
+      answers[id] = { _tag: "score", score: 2.4, confidence: 0.6 };
+    }
+  }
+  return answers;
+};
+
 describe("MCP server", () => {
   it("answers initialize, echoing the requested protocol version and listing tools", async () => {
     const deps = createMcpDeps({ harness: "script", ask: () => Effect.never });
@@ -71,7 +85,7 @@ describe("MCP server", () => {
     expect(parsed.result.instructions).toContain("typesafe_verify");
   });
 
-  it("lists the ask, verify, and review tools with their schemas", async () => {
+  it("lists the ask, verify, review, and skill-route tools with their schemas", async () => {
     const deps = createMcpDeps({ harness: "script", ask: () => Effect.never });
     const response = await handleMcpRequest(
       request({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
@@ -80,10 +94,16 @@ describe("MCP server", () => {
 
     const parsed = JSON.parse(String(response));
     const names = parsed.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toEqual(["typesafe_ask", "typesafe_verify", "typesafe_review"]);
+    expect(names).toEqual([
+      "typesafe_ask",
+      "typesafe_verify",
+      "typesafe_review",
+      "typesafe_skill_route",
+    ]);
     expect(parsed.result.tools[0].inputSchema.required).toEqual(["state", "questions"]);
     expect(parsed.result.tools[1].inputSchema.required).toEqual(["claims", "evidence"]);
     expect(parsed.result.tools[2].inputSchema.required).toEqual([]);
+    expect(parsed.result.tools[3].inputSchema.required).toEqual(["task", "skills"]);
   });
 
   it("returns formatted answers for a successful tool call", async () => {
@@ -106,6 +126,89 @@ describe("MCP server", () => {
     const parsed = JSON.parse(String(response));
     expect(parsed.result.isError).toBeUndefined();
     expect(parsed.result.content[0].text).toContain("p(yes)=0.99");
+  });
+
+  it("routes a task to a skill and logs the decision", async () => {
+    const path = await tempEventsPath();
+    const log = makeEventLog(path);
+    const deps = createMcpDeps({
+      harness: "omp",
+      ask: (input) => Effect.succeed(askResult(routeAnswers(input))),
+      log,
+    });
+
+    const response = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 8,
+        method: "tools/call",
+        params: {
+          name: "typesafe_skill_route",
+          arguments: {
+            task: "the export button spins forever",
+            skills: [
+              { name: "debugging", description: "Root-cause work for failures." },
+              { name: "better-ui", description: "UI polish." },
+            ],
+          },
+        },
+      }),
+      deps,
+    );
+
+    const parsed = JSON.parse(String(response));
+    expect(parsed.result.isError).toBeUndefined();
+    expect(parsed.result.content[0].text).toContain("load: debugging");
+    expect(parsed.result.content[0].text).toContain("confidence: 0.97");
+
+    const events = await Effect.runPromise(log.read());
+    expect(events.filter((event) => event._tag === "route")[0]).toMatchObject({
+      harness: "omp",
+      outcome: "routed",
+      skill: "debugging",
+      candidates: 2,
+    });
+  });
+
+  it("declines a route below the floors and rejects an empty catalog", async () => {
+    const lowDependence = (input: AskInput): AnswerMap => {
+      const answers = routeAnswers(input);
+      return { ...answers, dependence: { _tag: "score", score: 0.4, confidence: 0.5 } };
+    };
+    const deps = createMcpDeps({
+      harness: "omp",
+      ask: (input) => Effect.succeed(askResult(lowDependence(input))),
+    });
+
+    const response = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: {
+          name: "typesafe_skill_route",
+          arguments: {
+            task: "t",
+            skills: [{ name: "debugging", description: "Root-cause work." }],
+          },
+        },
+      }),
+      deps,
+    );
+    expect(JSON.parse(String(response)).result.content[0].text).toContain(
+      "load: nothing (low-dependence)",
+    );
+
+    const empty = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name: "typesafe_skill_route", arguments: { task: "t", skills: [] } },
+      }),
+      deps,
+    );
+    expect(JSON.parse(String(empty)).result.isError).toBe(true);
   });
 
   it("routes tools/call to the requested tool", async () => {

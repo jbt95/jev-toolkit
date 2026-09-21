@@ -154,6 +154,31 @@ Review state is caller-supplied code: fields are credential-redacted and
 clipped, and state above 90,000 characters is rejected so the caller splits the
 review.
 
+## typesafe_skill_route
+
+Routes a task to one skill from a caller-supplied catalog. The caller owns the
+catalog: Jev cannot pick a candidate that was omitted, so pass every skill that
+could apply.
+
+```json
+{
+  "task": "the export button spins forever; find out why and fix it",
+  "skills": [
+    { "name": "debugging", "description": "Systematic root-cause work for failures" },
+    { "name": "better-ui", "description": "UI polish: radius, spacing, hit areas" }
+  ]
+}
+```
+
+Each skill name is an option and each description is its criterion; `none` is
+always offered. Three questions go out per call: the choice, a `noul` asking
+whether a second skill helps, and a `score` for how much the task depends on the
+skill. Code applies the floors (`SKILL_CONFIDENCE_FLOOR` 0.5,
+`SKILL_DEPENDENCE_FLOOR` 2), so a low-confidence or low-dependence pick returns
+`load: nothing` with the reason instead of a skill. Limits: 64 candidates, 4,000
+task characters; the task is redacted and clipped, and only the outcome and the
+skill name are logged.
+
 ## Tool-surface policy
 
 `typesafe_ask` is the only tool an agent needs for an arbitrary judgment. New

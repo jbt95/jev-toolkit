@@ -85,6 +85,7 @@ jev`, `args: ["mcp"]`.
 | `jev audit run`      | Detect claims agents made; compliance summary; `--dry-run`                             |
 | `jev audit prompts`  | Measure the live prompt trigger against real prompts                                   |
 | `jev label sessions` | Outcome, friction, and waste labels per session                                        |
+| `jev route skills`   | Pick the skill for a task: `--task TEXT --skills-dir DIR`                              |
 | `jev eval pack`      | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency          |
 | `jev events`         | Tail the local event log                                                               |
 | `jev hook prompt`    | Harness hook adapter (prints the directive or nothing)                                 |
@@ -106,7 +107,7 @@ jev`, `args: ["mcp"]`.
 src/core/           services + schema (client, events, metrics, loops, text, transcript, paths)
 src/mcp/server.ts   stdio MCP server (jev mcp) — the judgment tool surface
 src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | mcp | meter
-src/question-packs/ detection, alignment, reviewer, failure, commit, session labels
+src/question-packs/ detection, alignment, reviewer, failure, commit, session labels, skill routing
 src/eval/          pack lab: fixture replay, answer drift, and agreement reports
 src/audit/          message extractors (opencode DB, claude projects, pi/omp logs)
 src/replay/         review-fixture capture/score measurement aid

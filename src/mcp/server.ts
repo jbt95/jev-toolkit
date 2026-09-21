@@ -20,7 +20,8 @@ import {
 import { CONTEXT_POLICY } from "../core/directives.ts";
 import type { EventLogService } from "../core/events.ts";
 import { Harness, QuestionMap, type JevEvent, type ReviewDimensionResult } from "../core/schema.ts";
-import { redact } from "../core/text.ts";
+import { clip, redact, stripFencedCode } from "../core/text.ts";
+import { skillRoute, skillRouteQuestions } from "../question-packs/skill-routing.ts";
 import {
   claimVerdicts,
   evidenceQuestions,
@@ -113,6 +114,21 @@ const ReviewArgs = Schema.Struct({
 });
 const decodeReviewArgs = Schema.decodeUnknownEffect(ReviewArgs);
 
+const MAX_SKILLS = 64;
+const MAX_TASK_CHARS = 4_000;
+const MAX_CRITERION_CHARS = 300;
+
+const SkillCandidateArgs = Schema.Struct({
+  name: Schema.NonEmptyString,
+  description: Schema.NonEmptyString,
+});
+const SkillRouteArgs = Schema.Struct({
+  task: Schema.NonEmptyString,
+  skills: Schema.Array(SkillCandidateArgs),
+  sessionID: Schema.optional(Schema.NonEmptyString),
+});
+const decodeSkillRouteArgs = Schema.decodeUnknownEffect(SkillRouteArgs);
+
 const SERVER_VERSION = "0.2.0";
 const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 
@@ -204,6 +220,30 @@ const REVIEW_INPUT_SCHEMA: JsonValue = {
   additionalProperties: false,
 };
 
+const SKILL_ROUTE_INPUT_SCHEMA: JsonValue = {
+  type: "object",
+  properties: {
+    task: { type: "string", description: "The task or request to route." },
+    skills: {
+      type: "array",
+      description:
+        "Candidate skills; each name is an option and each description is its criterion.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Skill name, used as the answer value." },
+          description: { type: "string", description: "One line on when this skill applies." },
+        },
+        required: ["name", "description"],
+        additionalProperties: false,
+      },
+    },
+    sessionID: { type: "string", description: "Optional harness session id." },
+  },
+  required: ["task", "skills"],
+  additionalProperties: false,
+};
+
 const ASK_DESCRIPTION =
   "Ask TypeSafe/Jev typed questions over a state and get calibrated, structured answers. " +
   "Primitives: choice (pick one of a defined set), noul (probability of yes), score " +
@@ -219,6 +259,13 @@ const VERIFY_DESCRIPTION =
   "numbers the evidence does not contain; Jev judges each remaining claim as supported, " +
   "contradicted, unrelated, or insufficient, with confidence. Use for draft answers and " +
   "completion claims. Redacts credentials; never logs the evidence.";
+
+const SKILL_ROUTE_DESCRIPTION =
+  "Route a task to one skill from a caller-supplied catalog: Jev picks the skill that fits, " +
+  "code applies the confidence and dependence floors, and the answer names the skill to load " +
+  "or says none fits. Use when an agent has more skills than it can hold in context. " +
+  "The catalog is the caller's; the model cannot choose a candidate that was omitted. " +
+  "Task text is redacted and clipped; only the outcome and skill name are logged.";
 
 const REVIEW_DESCRIPTION =
   "Review a change across eight independent quality dimensions (correctness, cognitive " +
@@ -438,8 +485,89 @@ const reviewTool = (config: McpConfig): McpTool => ({
   },
 });
 
+const skillRouteTool = (config: McpConfig): McpTool => ({
+  name: "typesafe_skill_route",
+  title: "TypeSafe Skill Route",
+  description: SKILL_ROUTE_DESCRIPTION,
+  inputSchema: SKILL_ROUTE_INPUT_SCHEMA,
+  call: async (args) => {
+    const decoded = await Effect.runPromise(Effect.result(decodeSkillRouteArgs(args)));
+    if (decoded._tag === "Failure") {
+      return {
+        ok: false,
+        text: `invalid typesafe_skill_route arguments: ${decoded.failure.message}`,
+      };
+    }
+    const payload = decoded.success;
+    if (payload.skills.length === 0) {
+      return { ok: false, text: "typesafe_skill_route needs at least one candidate skill" };
+    }
+    if (payload.skills.length > MAX_SKILLS) {
+      return {
+        ok: false,
+        text: `typesafe_skill_route accepts at most ${MAX_SKILLS} candidates per call`,
+      };
+    }
+    const input = {
+      task: clip(stripFencedCode(redact(payload.task)), MAX_TASK_CHARS),
+      candidates: payload.skills.map((skill) => ({
+        name: skill.name,
+        description: clip(redact(skill.description), MAX_CRITERION_CHARS),
+      })),
+    };
+    const outcome = await Effect.runPromise(
+      Effect.result(
+        config.ask({
+          harness: config.harness,
+          state: {
+            task: input.task,
+            skills: input.candidates.map((candidate) => ({
+              name: candidate.name,
+              description: candidate.description,
+            })),
+          },
+          questions: skillRouteQuestions(input),
+          sessionID: payload.sessionID,
+        }),
+      ),
+    );
+    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+
+    const route = skillRoute(input, outcome.success.answers);
+    await appendEvent(config.log, (ts) => ({
+      _tag: "route",
+      ts,
+      harness: config.harness,
+      sessionID: payload.sessionID,
+      outcome: route._tag === "routed" ? "routed" : "none",
+      reason: route._tag === "routed" ? undefined : route.reason,
+      skill: route._tag === "routed" ? route.skill : undefined,
+      candidates: input.candidates.length,
+      confidence: route.confidence,
+      dependence: route.dependence,
+    }));
+
+    const decision =
+      route._tag === "routed"
+        ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
+        : `load: nothing (${route.reason})`;
+    return {
+      ok: true,
+      text: [
+        `jev ${outcome.success.model}`,
+        decision,
+        `confidence: ${route.confidence}`,
+        `dependence: ${route.dependence}`,
+        `usage: ${outcome.success.usage.input} in / ${outcome.success.usage.output} out`,
+      ].join("\n"),
+    };
+  },
+});
+
 export function createMcpDeps(config: McpConfig): McpDeps {
-  return { tools: [askTool(config), verifyTool(config), reviewTool(config)] };
+  return {
+    tools: [askTool(config), verifyTool(config), reviewTool(config), skillRouteTool(config)],
+  };
 }
 
 const initializeResult = (params: Option.Option<JsonValue>, toolNames: string): JsonValue => {
