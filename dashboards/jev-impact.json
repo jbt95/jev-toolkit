@@ -1496,6 +1496,67 @@
           }
         }
       ]
+    },
+    {
+      "id": 34,
+      "type": "barchart",
+      "title": "Skill routes",
+      "description": "Skill-routing decisions over the range: how often a task loaded a skill and how often it declined. Decline reasons stay in the log; the table below shows the claims side of compliance.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "xField": "outcome",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(jev_skill_routes_total[$__range]))",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ]
     }
   ]
 }
