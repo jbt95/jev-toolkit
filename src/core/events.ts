@@ -54,7 +54,7 @@ const decodeLine = Schema.decodeUnknownOption(JevEventLine);
 
 export function makeEventLog(path: string): EventLogService {
   const append = (event: JevEvent): Effect.Effect<void, EventLogError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* appendProgram() {
       const line = yield* encodeLine(event).pipe(
         Effect.mapError(() => new EventLogError({ operation: "encode" })),
       );
@@ -68,7 +68,7 @@ export function makeEventLog(path: string): EventLogService {
     });
 
   const scan = (filter: { readonly harness?: Harness; readonly since?: string } = {}) =>
-    Effect.gen(function* () {
+    Effect.gen(function* scanProgram() {
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
         catch: (cause) => cause,

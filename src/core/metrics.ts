@@ -737,7 +737,7 @@ export function serveMeter(port: number, log: EventLogService): Effect.Effect<ne
     response.end(body);
   };
 
-  return Effect.gen(function* () {
+  return Effect.gen(function* serveMeterProgram() {
     const startedAtMs = yield* Clock.currentTimeMillis;
     return yield* Effect.scoped(
       Effect.acquireRelease(

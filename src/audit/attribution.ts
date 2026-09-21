@@ -319,7 +319,7 @@ export function loadPiOmpTurns(
   roots: ReadonlyArray<PiOmpRoot>,
   sinceIso: string,
 ): Effect.Effect<ReadonlyArray<SessionTurn>, AuditError> {
-  return Effect.gen(function* () {
+  return Effect.gen(function* loadPiOmpTurnsProgram() {
     const turns: Array<SessionTurn> = [];
     for (const { root } of roots) {
       const sessions = yield* readSessionRoot(root, (source) => new AuditError({ source }));

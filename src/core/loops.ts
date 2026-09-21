@@ -59,7 +59,7 @@ export const fingerprint = (text: string): string =>
 
 export function makeLoopGuard(path: string): LoopGuardService {
   const readState = (): Effect.Effect<Map<string, LoopRecordValue>, LoopError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* readStateProgram() {
       const raw = yield* Effect.tryPromise({
         try: () => readFile(path, "utf8"),
         catch: (cause) => cause,
@@ -100,7 +100,7 @@ export function makeLoopGuard(path: string): LoopGuardService {
     });
 
   const check = (fp: string, sample?: string): Effect.Effect<LoopCheck, LoopError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* checkProgram() {
       const now = yield* Clock.currentTimeMillis;
       const state = yield* readState();
       for (const [key, record] of state) {
@@ -127,7 +127,7 @@ export function makeLoopGuard(path: string): LoopGuardService {
     });
 
   const recent = (limit: number): Effect.Effect<ReadonlyArray<LoopRecent>, LoopError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* recentProgram() {
       const state = yield* readState();
       return [...state.entries()]
         .filter(([, record]) => Option.isSome(Option.fromUndefinedOr(record.sample)))

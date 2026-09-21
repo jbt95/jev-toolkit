@@ -252,7 +252,7 @@ describe("JevClient", () => {
       transport: makeTestTransport(() => Effect.succeed(cannedSuccess)),
     }).pipe(Layer.provide(EventLogLive(path)));
 
-    const program = Effect.gen(function* () {
+    const program = Effect.gen(function* clientAskProgram() {
       const client = yield* JevClient;
       return yield* client.ask(sampleInput);
     });

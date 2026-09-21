@@ -32,6 +32,10 @@
   No `try/catch` inside `Effect.gen`, no `catchAllCause` for mapping, no silent
   error swallowing.
 - Time via `Clock.currentTimeMillis`, never `Date.now()`.
+- Name every generator passed to `Effect.gen`
+  (`Effect.gen(function* runDoctorProgram() { … })`). `leadline check` pairs
+  functions by name; an anonymous generator pairs by line, so a later edit that
+  shifts lines misreports a regression on whatever body lands there.
 
 ## Schema rules
 

@@ -151,7 +151,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
   const logCall = callLogger(log);
 
   const ask = (input: AskInput): Effect.Effect<AskResult, JevError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* askProgram() {
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
 
@@ -257,7 +257,7 @@ export const JevClientSdkLive = (config: {
 }): Layer.Layer<JevClient, never, EventLog> =>
   Layer.effect(
     JevClient,
-    Effect.gen(function* () {
+    Effect.gen(function* JevClientSdkLiveProgram() {
       const log = yield* EventLog;
       return makeSdkJevClient({ ...config, log });
     }),

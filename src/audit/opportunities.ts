@@ -262,7 +262,7 @@ export function extractPiOmp(
   roots: ReadonlyArray<PiOmpRoot>,
   sinceIso: string,
 ): Effect.Effect<ReadonlyArray<RawMessage>, AuditError> {
-  return Effect.gen(function* () {
+  return Effect.gen(function* extractPiOmpProgram() {
     const messages: Array<RawMessage> = [];
     for (const { harness, root } of roots) {
       const sessions = yield* readSessionRoot(root, (source) => new AuditError({ source }));

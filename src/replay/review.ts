@@ -87,7 +87,7 @@ type FixtureFinding = ReturnType<typeof toFinding>;
 const sessionMessageTexts = (
   sessionID: string,
 ): Effect.Effect<ReadonlyArray<string>, unknown, Scope.Scope> =>
-  Effect.gen(function* () {
+  Effect.gen(function* sessionMessageTextsProgram() {
     const db = yield* openDb(DEFAULT_DB);
     const messageRows = db
       .prepare(
@@ -138,7 +138,7 @@ const captureSession = (
   session: Schema.Schema.Type<typeof SessionRow>,
   outDir: string,
 ): Effect.Effect<boolean, unknown, Scope.Scope> =>
-  Effect.gen(function* () {
+  Effect.gen(function* captureSessionProgram() {
     if (!session.title.toLowerCase().includes("review")) return false;
     const texts = yield* sessionMessageTexts(session.id);
     const findings = findingsFromTexts(texts);
@@ -148,7 +148,7 @@ const captureSession = (
   });
 
 const capture = (date: string, outDir: string): Effect.Effect<void, unknown, Scope.Scope> =>
-  Effect.gen(function* () {
+  Effect.gen(function* captureProgram() {
     const start = Date.parse(`${date}T00:00:00.000Z`);
     const end = start + 24 * 60 * 60 * 1000;
     const db = yield* openDb(DEFAULT_DB);
@@ -204,7 +204,7 @@ const classify = (inputPath: string): Effect.Effect<ClassifyResult> =>
   });
 
 const score = (dir: string): Effect.Effect<void, unknown> =>
-  Effect.gen(function* () {
+  Effect.gen(function* scoreProgram() {
     const files = (yield* Effect.tryPromise({
       try: () => readdir(dir),
       catch: (cause) => cause,

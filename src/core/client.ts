@@ -39,7 +39,7 @@ export interface JevTransport {
 export function createFetchTransport(endpoint: string, apiKey: string): JevTransport {
   return {
     send: (body) =>
-      Effect.gen(function* () {
+      Effect.gen(function* sendProgram() {
         const response = yield* Effect.tryPromise({
           try: (signal) =>
             fetch(endpoint, {
@@ -251,7 +251,7 @@ export function makeJevClient(
   const logCall = callLogger(log);
 
   const ask = (input: AskInput): Effect.Effect<AskResult, JevError> =>
-    Effect.gen(function* () {
+    Effect.gen(function* askProgram() {
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
 
@@ -327,7 +327,7 @@ export function makeJevClient(
 export const JevClientLive = (config: JevClientConfig): Layer.Layer<JevClient, never, EventLog> =>
   Layer.effect(
     JevClient,
-    Effect.gen(function* () {
+    Effect.gen(function* JevClientLiveProgram() {
       const log = yield* EventLog;
       return makeJevClient({ ...config, log });
     }),

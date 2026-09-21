@@ -399,7 +399,7 @@ export function digestPiOmp(
   roots: ReadonlyArray<PiOmpRoot>,
   sinceIso: string,
 ): Effect.Effect<ReadonlyArray<SessionDigest>, SessionAuditError> {
-  return Effect.gen(function* () {
+  return Effect.gen(function* digestPiOmpProgram() {
     const digests: Array<SessionDigest> = [];
     for (const { harness, root } of roots) {
       const sessions = yield* readSessionRoot(root, (source) => new SessionAuditError({ source }));

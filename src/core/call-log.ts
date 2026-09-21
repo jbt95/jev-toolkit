@@ -41,7 +41,7 @@ export interface CallLogger {
 export const callLogger =
   (log: EventLogService): CallLogger =>
   (input: CallIdentity, fields: CallLogFields): Effect.Effect<void> =>
-    Effect.gen(function* () {
+    Effect.gen(function* callLoggerProgram() {
       const now = yield* Clock.currentTimeMillis;
       const event: CallEvent = {
         _tag: "call",

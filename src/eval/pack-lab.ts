@@ -185,7 +185,7 @@ const runCase = (
   ask: PackAsk,
   harness: Harness,
 ): Effect.Effect<RunResult, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runCaseProgram() {
     const prepared = yield* prepareCase(pack, input);
     const started = yield* Clock.currentTimeMillis;
     const modelArg = Option.getOrUndefined(Option.fromUndefinedOr(options.model));
@@ -281,7 +281,7 @@ export const runPackLab = (
   ask: PackAsk,
   harness: Harness,
 ): Effect.Effect<PackLabReport, PackLabError> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runPackLabProgram() {
     const raw = yield* Effect.tryPromise({
       try: () => readFile(options.fixturePath, "utf8"),
       catch: () => new PackLabError({ reason: `cannot read fixtures: ${options.fixturePath}` }),

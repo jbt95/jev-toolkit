@@ -148,7 +148,7 @@ export const readSessionRoot = <E>(
   root: string,
   onError: (source: string) => E,
 ): Effect.Effect<ReadonlyArray<SessionFile>, E> =>
-  Effect.gen(function* () {
+  Effect.gen(function* readSessionRootProgram() {
     const files = yield* Effect.tryPromise({
       try: () => listJsonlFiles(root),
       catch: (cause) => cause,
