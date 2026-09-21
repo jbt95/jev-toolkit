@@ -41,7 +41,7 @@ Environment variables (see `core/paths.ts` and `core/client.ts`):
 | `JEV_HARNESS` | per-command default | Harness tag on events |
 | `JEV_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | Audit/label source |
 | `JEV_METER_PORT` | `8788` | Meter port |
-| `JEV_METRICS_STACK` | `~/work/claude-code-metrics` | Dashboard install script |
+| `JEV_METRICS_STACK` | `~/work/claude-code-metrics` | Your Prometheus/Grafana stack, for the dashboard installer |
 
 ## ask — raw judgment
 
@@ -119,7 +119,7 @@ A `triage` event with counts is appended.
 
 ```console
 jev route skills --task "the export button spins forever; find out why and fix it" \
-  --skills-dir ~/.agents/skills [--dry-run] [--json]
+  --skills-dir /path/to/skills [--dry-run] [--json]
 jev route skills --task TEXT --skills FILE      # catalog as JSON: [{name, description}]
 ```
 

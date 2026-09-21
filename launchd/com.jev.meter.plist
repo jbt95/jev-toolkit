@@ -4,20 +4,23 @@
   <dict>
     <key>Label</key>
     <string>com.jev.meter</string>
+    <!-- Path-free: launches the installed CLI shim, so the job survives a
+         repo move. Run scripts/install.sh first. -->
     <key>ProgramArguments</key>
     <array>
-      <string>/opt/homebrew/bin/node</string>
-      <string><HOME>/personal/jev-toolkit/src/cli/jev.ts</string>
-      <string>meter</string>
-      <string>serve</string>
+      <string>/bin/sh</string>
+      <string>-c</string>
+      <string>mkdir -p "$HOME/.local/share/jev"; exec "$HOME/.local/bin/jev" meter serve &gt;&gt;"$HOME/.local/share/jev/meter.log" 2&gt;&amp;1</string>
     </array>
+    <!-- launchd starts with a bare PATH: Homebrew's node must be reachable. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
-    <key>StandardOutPath</key>
-    <string><HOME>/.local/share/jev/meter.log</string>
-    <key>StandardErrorPath</key>
-    <string><HOME>/.local/share/jev/meter.log</string>
   </dict>
 </plist>

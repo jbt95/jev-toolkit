@@ -1,8 +1,8 @@
 # Metrics and dashboards
 
 The meter turns the local event log into Prometheus series; Grafana renders
-them as the `Jev Impact` dashboard on the existing
-`~/work/claude-code-metrics` stack.
+them as the `Jev Impact` dashboard on your own Prometheus/Grafana stack
+(the installer defaults to `~/work/claude-code-metrics`).
 
 ```mermaid
 flowchart LR
@@ -126,7 +126,7 @@ into the metrics stack (idempotent; never rewrites an existing scrape job):
 
 ```console
 scripts/install-dashboard.sh            # JEV_METRICS_STACK to override the stack path
-(cd ~/work/claude-code-metrics && podman-compose restart grafana)
+(cd "$JEV_METRICS_STACK" && podman-compose restart grafana)
 ```
 
 Dashboard: <http://localhost:3000/d/jev-impact>.
@@ -137,22 +137,25 @@ freshness (growing means nothing writes the log).
 
 ## Always-on meter (launchd)
 
-`launchd/com.jev.meter.plist` runs `jev meter serve` under launchd
-(`RunAtLoad`, `KeepAlive`) with logs at `~/.local/share/jev/meter.log`:
+`launchd/com.jev.meter.plist` runs the installed `jev` shim under launchd
+(`RunAtLoad`, `KeepAlive`) with logs at `~/.local/share/jev/meter.log`. The
+plists carry no absolute repo path: run `scripts/install.sh` first, then the
+job follows the `~/.local/bin/jev` symlink wherever the repo lives:
 
 ```console
-launchctl bootstrap gui/$UID ~/personal/jev-toolkit/launchd/com.jev.meter.plist
+launchctl bootstrap gui/$UID "$PWD/launchd/com.jev.meter.plist"
 launchctl bootout gui/$UID/com.jev.meter      # stop
 ```
 
 ## Nightly refresh (launchd)
 
-`launchd/com.jev.nightly.plist` runs `scripts/nightly.sh` at 04:30: label 24h
+`launchd/com.jev.nightly.plist` runs the `jev-nightly` shim (linked to
+`scripts/nightly.sh` by `scripts/install.sh`) at 04:30: label 24h
 of sessions, audit 24h of claims, then run `scripts/check-metrics.sh` and log
 the result to `~/.local/share/jev/nightly.log`.
 
 ```console
-launchctl bootstrap gui/$UID ~/personal/jev-toolkit/launchd/com.jev.nightly.plist
+launchctl bootstrap gui/$UID "$PWD/launchd/com.jev.nightly.plist"
 launchctl bootout gui/$UID/com.jev.nightly    # stop
 ```
 

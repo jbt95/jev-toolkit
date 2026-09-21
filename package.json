@@ -10,6 +10,16 @@
     "pi-extension",
     "typesafe"
   ],
+  "homepage": "https://github.com/jbt95/jev-toolkit",
+  "license": "MIT",
+  "author": "jbt95",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jbt95/jev-toolkit.git"
+  },
+  "bin": {
+    "jev": "./bin/jev"
+  },
   "type": "module",
   "scripts": {
     "lint": "oxlint .",
@@ -31,6 +41,9 @@
     "oxlint": "1.81.0",
     "typescript": "5.9.2",
     "vitest": "3.2.4"
+  },
+  "engines": {
+    "node": ">=26"
   },
   "pi": {
     "extensions": [

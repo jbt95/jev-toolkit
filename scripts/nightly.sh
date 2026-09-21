@@ -5,7 +5,18 @@
 # launchd session (`launchctl setenv TYPESAFE_API_KEY ...`) or from
 # ~/.config/jev/env (chmod 600). This repo never stores the key.
 set -u
-repo=$(cd "$(dirname "$0")/.." && pwd)
+# Installed as ~/.local/bin/jev-nightly (a symlink into the repo), so resolve
+# this script's own symlinks before deriving the repo root from its path.
+target=$0
+while [ -L "$target" ]; do
+  dir=$(cd "$(dirname "$target")" && pwd)
+  target=$(readlink "$target")
+  case $target in
+    /*) ;;
+    *) target="$dir/$target" ;;
+  esac
+done
+repo=$(cd "$(dirname "$target")/.." && pwd)
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 
 if [ -z "${TYPESAFE_API_KEY:-}" ] && [ -f "$HOME/.config/jev/env" ]; then

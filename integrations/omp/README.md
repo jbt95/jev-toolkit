@@ -32,7 +32,7 @@ through a linked path.
 ## Install
 
 ```console
-omp plugin install ~/personal/jev-toolkit
+omp plugin install /path/to/jev-toolkit   # the clone
 omp plugin list --json   # jev-toolkit must list the extension and skill
 omp plugin doctor        # must report no load errors
 ```

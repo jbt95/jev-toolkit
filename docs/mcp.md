@@ -4,7 +4,7 @@ One stdio server. `typesafe_ask` is the generic judgment tool, and task-shaped
 tools may wrap the question packs under the tool-surface policy below. Every
 MCP-capable harness connects to the same process.
 
-The server mirrors the shapes of `~/personal/leadline/src/mcp.rs`:
+The server keeps the strict stdio shape of a reference MCP server:
 version-echoing `initialize` (with an `instructions` field hosts inject),
 strict `tools/call` validation, and text-content results. stdout carries only
 JSON-RPC lines.

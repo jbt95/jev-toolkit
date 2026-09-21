@@ -55,24 +55,36 @@ trigger against real user prompts. Both are model-first: prose-only state
 applies only documented thresholds. Details in [docs/cli.md](docs/cli.md).
 
 **Impact metrics** — every call, opportunity, triage, and label lands in one
-local JSONL event log; `jev meter serve` exposes Prometheus series scraped by
-`~/work/claude-code-metrics` and rendered as the `Jev Impact` dashboard at
-<http://localhost:3000/d/jev-impact>. Details in [docs/metrics.md](docs/metrics.md).
+local JSONL event log; `jev meter serve` exposes Prometheus series for any
+scraper, rendered as the `Jev Impact` dashboard on a Grafana instance of your
+own. Details in [docs/metrics.md](docs/metrics.md).
 
-## Quick start
+## Install
+
+Needs Node >= 26 and a TypeSafe API key.
 
 ```console
-scripts/install.sh        # link ~/.local/bin/jev -> bin/jev (Node >= 26)
+git clone git@github.com:jbt95/jev-toolkit.git
+cd jev-toolkit
+npm ci                    # dev deps only: the CLI runs from source
+scripts/install.sh        # link ~/.local/bin/jev -> bin/jev
 export TYPESAFE_API_KEY=… # must be visible to harness processes
-
-jev ask </path/to/payload.json        # raw judgment over stdin
-jev triage failure --transcript FILE  # failure classification + loop breaker
-jev audit run --since 24h --dry-run   # what claims did agents make?
-jev meter serve                       # Prometheus on 127.0.0.1:8788
 ```
 
 Wire your harness: [docs/mcp.md](docs/mcp.md) — any stdio MCP client, `command:
-jev`, `args: ["mcp"]`.
+jev`, `args: ["mcp"]`. Per-harness plugins (opencode, Claude Code, pi, omp) are
+under [integrations/](integrations/) with their own install steps.
+
+```console
+jev ask </path/to/payload.json        # raw judgment over stdin
+jev triage failure --transcript FILE  # failure classification + loop breaker
+jev audit run --since 24h --dry-run   # what claims did agents make?
+jev route skills --task TEXT --skills-dir DIR   # pick the skill for a task
+jev meter serve                       # Prometheus on 127.0.0.1:8788
+```
+
+Optional: an always-on meter and a nightly label/audit run ships as launchd
+jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 
 ### CLI at a glance
 
@@ -116,8 +128,9 @@ tests/              offline tests + fixtures (fake transports, temp dirs)
 dashboards/         Jev Impact Grafana dashboard + install script
 launchd/            always-on meter + nightly label/audit plists
 scripts/            install.sh · install-dashboard.sh · check-metrics.sh · nightly.sh · smoke-*.sh
-tools/oxlint/       vendored anti-slop rule groups
+tools/oxlint/       vendored anti-slop rule groups (see License)
 docs/               this documentation set
+skills-lock.json    dev-time agent skills: source + hashes, fetched locally
 ```
 
 ## Tooling
@@ -147,6 +160,13 @@ harness tag — the wiring check to run after install or config changes:
 scripts/smoke-harnesses.sh                    # opencode, claude-code, pi, omp
 scripts/smoke-harnesses.sh --only=omp,pi      # subset
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). This covers the `tools/oxlint/anti-slop` rule
+groups as well: dev tooling loaded by `oxlint.config.ts` as Oxlint `jsPlugins`,
+never part of the runtime surface (`effect` and `@typesafe-ai/sdk` are the only
+runtime dependencies).
 
 ## Privacy
 

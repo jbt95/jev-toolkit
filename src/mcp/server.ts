@@ -1,7 +1,7 @@
 // Stdio MCP server: judgment tools behind newline-delimited JSON-RPC 2.0.
 // `typesafe_ask` is the generic primitive; task-shaped tools wrap question
 // packs, own their state assembly, and log through the same JevClient.
-// Shapes mirror ~/personal/leadline/src/mcp.rs: version-echoing `initialize`
+// Strict stdio server shape: version-echoing `initialize`
 // (with an `instructions` field hosts may inject), strict `tools/call`
 // validation, and text-content tool results. stdout carries only JSON-RPC lines.
 import * as Clock from "effect/Clock";

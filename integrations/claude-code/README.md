@@ -12,14 +12,14 @@ Plugin with three parts:
 
 ## Requires
 
-`jev` on `PATH` — install with `~/personal/jev-toolkit/scripts/install.sh`. The
+`jev` on `PATH` — install with `scripts/install.sh` from the clone. The
 hook is silent when `jev` is absent; the MCP server reports a config error when
 `TYPESAFE_API_KEY` is missing.
 
 ## Install
 
 ```console
-claude plugin marketplace add ~/personal/jev-toolkit
+claude plugin marketplace add jbt95/jev-toolkit   # or a local clone path
 claude plugin install jev-toolkit@jev-toolkit
 claude plugin list
 ```

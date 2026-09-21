@@ -3,3 +3,13 @@ node_modules/
 .DS_Store
 .pi/fabric/
 coverage/
+
+# Agent skills are fetched locally, not vendored: skills-lock.json records
+# their source and hashes. .claude/skills only holds symlinks into .agents/.
+.agents/skills/
+.claude/skills/
+.claude/settings.local.json
+
+# Local environment (nothing here is read from a file by the repo itself)
+.env
+.env.*

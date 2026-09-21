@@ -2,8 +2,8 @@
 
 ## Stack
 
-- Runtime dependencies: **`effect` 4.0.0-rc.112** (pinned exactly, mirrors
-  `~/personal/creatorOS`) and **`@typesafe-ai/sdk` 0.6.0** (pinned exactly;
+- Runtime dependencies: **`effect` 4.0.0-rc.112** (pinned exactly) and
+  **`@typesafe-ai/sdk` 0.6.0** (pinned exactly;
   production Jev transport via `TypeSafeClient.systemOne`). Everything else is
   a devDependency:
   `typescript` 5.9.2, `@types/node` 22.18.0, `vitest` 3.2.4, `oxlint` 1.81.0,
@@ -14,7 +14,7 @@
 - Import paths: the `@/…` alias exists for tests and repo-internal tooling
   only; the CLI runs on plain Node, which ignores tsconfig paths.
 
-## Effect rules (mirror ~/personal/creatorOS)
+## Effect rules
 
 - Core code returns `Effect.Effect`, not `Promise`/`async`. Wrap unavoidable
   platform APIs (`fetch`, `node:fs`, `node:http`, `node:sqlite`,
@@ -51,7 +51,16 @@
 - Tests are offline: fake services/transports, temp dirs, `127.0.0.1` only.
   Never call `api.typesafe.ai` in tests. No module mocking (`vi.mock` banned)
   — inject services and functions instead.
-- Commits per task, local only. **Never push.**
+- Commits per task. Agents never push; the maintainer does.
+
+## Repository layout
+
+- `.agents/skills/` and `.claude/skills/` are local working directories, not
+  repository content: the dev-time skills come from elsewhere and are recorded
+  (source + hashes) in `skills-lock.json`. Both paths are gitignored.
+- `tools/oxlint/anti-slop/**` is dev tooling loaded by `oxlint.config.ts` as
+  Oxlint `jsPlugins`; it is excluded from analysis scope in `leadline.toml` and
+  never imported by `src/`.
 
 ## Privacy rules
 

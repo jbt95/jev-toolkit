@@ -1,9 +1,9 @@
 # Leadline configuration for jev-toolkit.
 #
 # Scope: product code under src/, its tests, and the harness integrations.
-# tools/oxlint holds vendored anti-slop rule code copied from upstream and
-# covered by its own rule tests; it would otherwise dominate every complexity
-# and CRAP list, so it stays out of analysis scope.
+# tools/oxlint holds the anti-slop rule code, covered by its own rule tests;
+# it would otherwise dominate every complexity and CRAP list, so it stays out
+# of analysis scope.
 
 [analysis]
 exclude = ["tools/**", "coverage/**"]
