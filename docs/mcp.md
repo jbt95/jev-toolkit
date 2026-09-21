@@ -97,6 +97,15 @@ against the question's ordered levels when known
 Choice and score lines append `— LOW, treat as no signal` when confidence is
 below 0.4.
 
+**Encoded nested arguments.** Some MCP clients send a nested object or array as
+a JSON-encoded string — pi's direct tools did this for `questions` and lost the
+call to a decode error, after which the model answered from its own guess. The
+server therefore accepts either shape for `questions`, `claims`, `files`,
+`previousEvaluation`, and `skills`: the string is parsed, then validated exactly
+as before. A string that is not valid JSON still fails with the usual
+`invalid typesafe_ask arguments` text, and the advertised input schemas stay
+strict, so conforming clients are unaffected.
+
 ## typesafe_verify
 
 Checks claims against evidence before they are published. Code extracts the

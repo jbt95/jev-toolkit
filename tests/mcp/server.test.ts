@@ -240,6 +240,97 @@ describe("MCP server", () => {
     expect(text).toContain("second: unavailable (JevConfigError)");
   });
 
+  it("accepts a JSON-encoded string for nested arguments", async () => {
+    const seen: Array<AskInput> = [];
+    const deps = createMcpDeps({
+      harness: "pi",
+      ask: (input) => {
+        seen.push(input);
+        const answers: Record<string, Answer> = {};
+        for (const id of Object.keys(input.questions)) {
+          answers[id] = { _tag: "noul", noul: 0.97 };
+        }
+        return Effect.succeed(askResult(answers));
+      },
+    });
+
+    const response = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 20,
+        method: "tools/call",
+        params: {
+          name: "typesafe_ask",
+          arguments: {
+            state: "a small team's audit log",
+            questions: JSON.stringify({
+              best: { _tag: "noul", instructions: "Is SQLite enough for a small team?" },
+            }),
+          },
+        },
+      }),
+      deps,
+    );
+
+    const parsed = JSON.parse(String(response));
+    expect(parsed.result.isError).toBeUndefined();
+    expect(parsed.result.content[0].text).toContain("p(yes)=0.97");
+    // The string is parsed before the client sees it: the question map arrives decoded.
+    expect(seen).toHaveLength(1);
+    expect(Object.keys(seen[0]?.questions ?? {})).toEqual(["best"]);
+  });
+
+  it("accepts a JSON-encoded string for a skill catalog", async () => {
+    const deps = createMcpDeps({
+      harness: "pi",
+      ask: (input) => Effect.succeed(askResult(routeAnswers(input))),
+    });
+
+    const response = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 21,
+        method: "tools/call",
+        params: {
+          name: "typesafe_skill_route",
+          arguments: {
+            task: "the export button spins forever",
+            skills: JSON.stringify([
+              { name: "debugging", description: "Root-cause work for failures." },
+              { name: "better-ui", description: "UI polish." },
+            ]),
+          },
+        },
+      }),
+      deps,
+    );
+
+    const parsed = JSON.parse(String(response));
+    expect(parsed.result.isError).toBeUndefined();
+    expect(parsed.result.content[0].text).toContain("load: debugging");
+  });
+
+  it("still rejects a malformed encoded payload", async () => {
+    const deps = createMcpDeps({ harness: "pi", ask: () => Effect.never });
+
+    const response = await handleMcpRequest(
+      request({
+        jsonrpc: "2.0",
+        id: 22,
+        method: "tools/call",
+        params: {
+          name: "typesafe_ask",
+          arguments: { state: "text", questions: "{not json" },
+        },
+      }),
+      deps,
+    );
+
+    const parsed = JSON.parse(String(response));
+    expect(parsed.result.isError).toBe(true);
+    expect(parsed.result.content[0].text).toContain("invalid typesafe_ask arguments");
+  });
+
   it("declines a route below the floors and rejects an empty catalog", async () => {
     const lowDependence = (input: AskInput): AnswerMap => {
       const answers = routeAnswers(input);

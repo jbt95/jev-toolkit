@@ -88,9 +88,18 @@ const decodeToolCallParams = Schema.decodeUnknownOption(ToolCallParams);
 const InitializeParams = Schema.Struct({ protocolVersion: Schema.optional(Schema.String) });
 const decodeInitializeParams = Schema.decodeUnknownOption(InitializeParams);
 
+/**
+ * A field the caller may send as its value or as a JSON-encoded string of it.
+ * pi's direct tools occasionally stringify a nested object or array; without
+ * this the whole call fails on decode, and the model then tends to answer from
+ * its own guess instead of retrying with a real shape.
+ */
+const jsonOrEncoded = <S extends Schema.Constraint>(schema: S) =>
+  Schema.Union([schema, Schema.fromJsonString(schema)]);
+
 const AskArgs = Schema.Struct({
   state: JsonValueSchema,
-  questions: QuestionMap,
+  questions: jsonOrEncoded(QuestionMap),
   model: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
   sessionID: Schema.optional(Schema.NonEmptyString),
 });
@@ -100,21 +109,25 @@ const MAX_CLAIMS = 20;
 const MAX_EVIDENCE_CHARS = 40_000;
 const MAX_REVIEW_STATE_CHARS = 90_000;
 
+const Claims = Schema.Array(
+  Schema.Struct({ id: Schema.NonEmptyString, text: Schema.NonEmptyString }),
+);
 const VerifyArgs = Schema.Struct({
-  claims: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString, text: Schema.NonEmptyString })),
+  claims: jsonOrEncoded(Claims),
   evidence: Schema.String,
   sessionID: Schema.optional(Schema.NonEmptyString),
 });
 const decodeVerifyArgs = Schema.decodeUnknownEffect(VerifyArgs);
 
+const ReviewFiles = Schema.Array(
+  Schema.Struct({ path: Schema.NonEmptyString, content: Schema.String }),
+);
 const ReviewArgs = Schema.Struct({
   task: Schema.optional(Schema.String),
   diff: Schema.optional(Schema.String),
-  files: Schema.optional(
-    Schema.Array(Schema.Struct({ path: Schema.NonEmptyString, content: Schema.String })),
-  ),
+  files: Schema.optional(jsonOrEncoded(ReviewFiles)),
   repositoryContext: Schema.optional(Schema.String),
-  previousEvaluation: Schema.optional(PreviousEvaluation),
+  previousEvaluation: Schema.optional(jsonOrEncoded(PreviousEvaluation)),
   sessionID: Schema.optional(Schema.NonEmptyString),
 });
 const decodeReviewArgs = Schema.decodeUnknownEffect(ReviewArgs);
@@ -129,7 +142,7 @@ const SkillCandidateArgs = Schema.Struct({
 });
 const SkillRouteArgs = Schema.Struct({
   task: Schema.NonEmptyString,
-  skills: Schema.Array(SkillCandidateArgs),
+  skills: jsonOrEncoded(Schema.Array(SkillCandidateArgs)),
   sessionID: Schema.optional(Schema.NonEmptyString),
 });
 const decodeSkillRouteArgs = Schema.decodeUnknownEffect(SkillRouteArgs);
