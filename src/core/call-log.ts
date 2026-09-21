@@ -28,13 +28,18 @@ export const summarizeQuestions = (
 ): ReadonlyArray<{ readonly id: string; readonly type: "choice" | "noul" | "score" }> =>
   Object.entries(questions).map(([id, question]) => ({ id, type: question._tag }));
 
+/** The logger both transports append call events through. */
+export interface CallLogger {
+  (input: CallIdentity, fields: CallLogFields): Effect.Effect<void>;
+}
+
 /**
  * One logger for every transport. Both clients write the same event shape, so
  * a field added here reaches fetches and SDK calls alike; logging never fails
  * a judgment call.
  */
 export const callLogger =
-  (log: EventLogService) =>
+  (log: EventLogService): CallLogger =>
   (input: CallIdentity, fields: CallLogFields): Effect.Effect<void> =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;

@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
-import type { Answer, AnswerMap, Question, QuestionMap } from "../core/schema.ts";
+import { choiceOf } from "../core/answers.ts";
+import type { AnswerMap, Question, QuestionMap } from "../core/schema.ts";
 
 /** Verdicts a claim can receive from the evidence matrix. */
 export const CLAIM_VERDICTS = ["supported", "contradicted", "unrelated", "insufficient"] as const;
@@ -77,12 +78,8 @@ export interface VerdictAnswer {
   readonly confidence: number;
 }
 
-const verdictOf = (answer: Answer | undefined): VerdictAnswer =>
-  Option.fromUndefinedOr(answer).pipe(
-    Option.filter(
-      (candidate): candidate is Extract<Answer, { readonly _tag: "choice" }> =>
-        candidate._tag === "choice",
-    ),
+const verdictOf = (answers: AnswerMap, key: string): VerdictAnswer =>
+  choiceOf(answers, key).pipe(
     Option.flatMap((choice) =>
       Option.fromUndefinedOr(CLAIM_VERDICTS.find((candidate) => candidate === choice.choice)).pipe(
         Option.map((verdict) => ({ verdict, confidence: choice.confidence })),
@@ -100,7 +97,7 @@ export const claimVerdicts = (
   input: EvidenceInput,
 ): ReadonlyArray<ClaimVerdictResult> =>
   input.claims.map((claim, index) => {
-    const answer = verdictOf(answers[`c${index}_verdict`]);
+    const answer = verdictOf(answers, `c${index}_verdict`);
     const missingNumbers = numbersMissingFromEvidence(claim.text, input.evidence);
     return {
       id: claim.id,

@@ -1,40 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { runCli } from "@/cli/jev.ts";
 import { makeEventLog } from "@/core/events.ts";
-import { apiResponse, cliLayers, tempEventsPath, type WireResponse } from "../helpers.ts";
+import {
+  apiResponse,
+  cliLayers,
+  freePort,
+  tempEventsPath,
+  waitFor,
+  type WireResponse,
+} from "../helpers.ts";
 
 const respond = (): WireResponse => apiResponse({ q1: { type: "noul", noul: 0.99 } });
-
-const freePort = async (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null) {
-        reject(new Error("probe did not bind"));
-        return;
-      }
-      // SAFETY: a TCP server listening on 127.0.0.1 reports an AddressInfo.
-      const info = address as AddressInfo;
-      probe.close(() => resolve(info.port));
-    });
-  });
-
-const waitFor = async (url: string): Promise<Response> => {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      return await fetch(url);
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  throw new Error(`server did not start: ${url}`);
-};
 
 const appendCall = async (path: string, harness: "cli" | "pi"): Promise<void> => {
   await Effect.runPromise(
@@ -118,6 +96,22 @@ describe("jev CLI surface", () => {
 
     expect(code).toBe(1);
     expect(String(errorSpy.mock.calls[0]?.[0])).toContain("usage: jev <command>");
+  });
+
+  it("exits 1 when stdin cannot be read", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", { value: { isTTY: false }, configurable: true });
+    try {
+      const code = await Effect.runPromise(
+        runCli(["ask"], cliLayers(await tempEventsPath(), respond)),
+      );
+
+      expect(code).toBe(1);
+    } finally {
+      if (stdinDescriptor !== undefined) Object.defineProperty(process, "stdin", stdinDescriptor);
+    }
+    expect(String(errorSpy.mock.calls[0]?.[0])).toBe("failed to read stdin");
   });
 
   it("serves metrics on the CLI-selected port", async () => {

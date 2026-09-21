@@ -13,8 +13,10 @@ import {
   extractOpencode,
   extractPiOmp,
   toDetectedOpportunity,
+  type AuditError,
   type CorrelatedOpportunity,
   type DetectedOpportunity,
+  type PiOmpRoot,
   type RawMessage,
 } from "../audit/opportunities.ts";
 import {
@@ -27,8 +29,10 @@ import {
   digestClaude,
   digestOpencode,
   digestPiOmp,
+  type SessionAuditError,
   type SessionDigest,
 } from "../audit/sessions.ts";
+import { choiceOf, noulOf, noulValue, scoreValue } from "../core/answers.ts";
 import { JevClient, describeJevError, formatAnswers, type AskResult } from "../core/client.ts";
 import { JevClientSdkLive, sdkBaseURL } from "../core/sdk-client.ts";
 import { matchQuantitativeClaim } from "../core/detector.ts";
@@ -52,20 +56,18 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import {
-  Harness,
-  QuestionMap,
-  type Answer,
-  type CallEvent,
-  type JevEvent,
-} from "../core/schema.ts";
+import { Harness, QuestionMap, type CallEvent, type JevEvent } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
 import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
 import { skillRoute, skillRouteQuestions } from "../question-packs/skill-routing.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
-import { claimDetectionQuestions, detectedClaims } from "../question-packs/claim-detection.ts";
+import {
+  claimDetectionQuestions,
+  detectedClaims,
+  type DetectedClaim,
+} from "../question-packs/claim-detection.ts";
 import {
   commitQuestions,
   verdictFor,
@@ -472,28 +474,46 @@ const runEval = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cli
     return 0;
   });
 
-const detectPromptClaims = (
+/** Claim detection runs in batches of 20 messages, 2 questions each. */
+const DETECTION_BATCH = 20;
+
+/** Claims the model routed in `messages`, keyed by message order. */
+const detectClaimsInBatches = (
   ask: JevAsk,
   harness: Harness,
   messages: ReadonlyArray<RawMessage>,
-): Effect.Effect<Map<number, string>, string> =>
+  subject: "assistant_message" | "user_prompt",
+): Effect.Effect<ReadonlyArray<readonly [number, DetectedClaim]>, string> =>
   Effect.gen(function* () {
-    const detected = new Map<number, string>();
-    for (let start = 0; start < messages.length; start += 20) {
-      const batch = messages.slice(start, start + 20);
+    const found: Array<readonly [number, DetectedClaim]> = [];
+    for (let start = 0; start < messages.length; start += DETECTION_BATCH) {
+      const batch = messages.slice(start, start + DETECTION_BATCH);
       const result = yield* ask({
         harness,
         state: {
           messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
         },
-        questions: claimDetectionQuestions({ count: batch.length, subject: "user_prompt" }),
+        questions: claimDetectionQuestions({ count: batch.length, subject }),
       }).pipe(Effect.mapError(describeJevError));
-      for (const found of detectedClaims(result.answers, batch.length)) {
-        detected.set(start + found.index, found.kind);
+      for (const claim of detectedClaims(result.answers, batch.length)) {
+        found.push([start + claim.index, claim] as const);
       }
     }
-    return detected;
+    return found;
   });
+
+const detectPromptClaims = (
+  ask: JevAsk,
+  harness: Harness,
+  messages: ReadonlyArray<RawMessage>,
+): Effect.Effect<Map<number, string>, string> =>
+  detectClaimsInBatches(ask, harness, messages, "user_prompt").pipe(
+    Effect.map((found) => {
+      const detected = new Map<number, string>();
+      for (const [index, claim] of found) detected.set(index, claim.kind);
+      return detected;
+    }),
+  );
 
 const promptExamples = (
   indexes: ReadonlyArray<number>,
@@ -553,70 +573,95 @@ const runAuditPrompts = (
     return 0;
   });
 
-const extractAuditMessages = (
-  wants: (harness: string) => boolean,
+/** A failing harness reader; both audit readers carry the harness tag as `source`. */
+type SourceError = AuditError | SessionAuditError;
+
+/** The pi/omp roots to read, in pi-then-omp order. */
+type PiOmpRoots = ReadonlyArray<PiOmpRoot>;
+
+type HarnessReaders<A> = {
+  readonly opencode: (
+    dbPath: string,
+    sinceIso: string,
+  ) => Effect.Effect<ReadonlyArray<A>, SourceError>;
+  readonly claude: (root: string, sinceIso: string) => Effect.Effect<ReadonlyArray<A>, SourceError>;
+  readonly piOmp: (
+    roots: PiOmpRoots,
+    sinceIso: string,
+  ) => Effect.Effect<ReadonlyArray<A>, SourceError>;
+};
+
+const piOmpRootsFor = (wants: (harness: Harness) => boolean): PiOmpRoots =>
+  [
+    { harness: "pi" as const, root: piSessionsDir() },
+    { harness: "omp" as const, root: ompSessionsDir() },
+  ].filter((entry) => wants(entry.harness));
+
+/** Collect what every wanted harness yields, prefixing each failure with `label`. */
+const harvestHarnesses = <A>(
+  wants: (harness: Harness) => boolean,
   sinceIso: string,
-): Effect.Effect<ReadonlyArray<RawMessage>, string> =>
+  label: string,
+  readers: HarnessReaders<A>,
+): Effect.Effect<ReadonlyArray<A>, string> =>
   Effect.gen(function* () {
-    const messages: Array<RawMessage> = [];
+    const fail = (error: SourceError): string => `${label}: ${error.source}`;
+    const collected: Array<A> = [];
     if (wants("opencode")) {
-      // Both surfaces: user turns are the demand signal, assistant turns the
-      // published claims. Each keeps its source so compliance can be split.
-      const dbPath = opencodeDbPath();
-      messages.push(
-        ...(yield* extractOpencode(dbPath, sinceIso, "user").pipe(
-          Effect.mapError((error) => `audit failed: ${error.source}`),
-        )),
-        ...(yield* extractOpencode(dbPath, sinceIso, "assistant").pipe(
-          Effect.mapError((error) => `audit failed: ${error.source}`),
-        )),
+      collected.push(
+        ...(yield* readers.opencode(opencodeDbPath(), sinceIso).pipe(Effect.mapError(fail))),
       );
     }
     if (wants("claude-code")) {
-      messages.push(
-        ...(yield* extractClaude(claudeProjectsDir(), sinceIso).pipe(
-          Effect.mapError((error) => `audit failed: ${error.source}`),
-        )),
+      collected.push(
+        ...(yield* readers.claude(claudeProjectsDir(), sinceIso).pipe(Effect.mapError(fail))),
       );
     }
-    const piOmpRoots = [
-      { harness: "pi" as const, root: piSessionsDir() },
-      { harness: "omp" as const, root: ompSessionsDir() },
-    ].filter((entry) => wants(entry.harness));
-    if (piOmpRoots.length > 0) {
-      messages.push(
-        ...(yield* extractPiOmp(piOmpRoots, sinceIso).pipe(
-          Effect.mapError((error) => `audit failed: ${error.source}`),
-        )),
-      );
+    const roots = piOmpRootsFor(wants);
+    if (roots.length > 0) {
+      collected.push(...(yield* readers.piOmp(roots, sinceIso).pipe(Effect.mapError(fail))));
     }
-    return messages;
+    return collected;
   });
 
-/** Stage 1: detect claims with Jev (batches of 20 messages, 2 questions each). */
+/**
+ * Audit reads both opencode surfaces: user turns are the demand signal and
+ * assistant turns the published claims. Each keeps its source so compliance
+ * can be split.
+ */
+const auditReaders: HarnessReaders<RawMessage> = {
+  opencode: (dbPath, sinceIso) =>
+    Effect.gen(function* () {
+      const user = yield* extractOpencode(dbPath, sinceIso, "user");
+      const assistant = yield* extractOpencode(dbPath, sinceIso, "assistant");
+      return [...user, ...assistant];
+    }),
+  claude: extractClaude,
+  piOmp: extractPiOmp,
+};
+
+const digestReaders: HarnessReaders<SessionDigest> = {
+  opencode: digestOpencode,
+  claude: digestClaude,
+  piOmp: digestPiOmp,
+};
+
+/** Stage 1: detect claims with Jev, skipping any message that is absent. */
 const detectAuditClaims = (
   ask: JevAsk,
   harness: Harness,
   messages: ReadonlyArray<RawMessage>,
 ): Effect.Effect<ReadonlyArray<DetectedOpportunity>, string> =>
-  Effect.gen(function* () {
-    const detected: Array<DetectedOpportunity> = [];
-    for (let start = 0; start < messages.length; start += 20) {
-      const batch = messages.slice(start, start + 20);
-      const result = yield* ask({
-        harness,
-        state: {
-          messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
-        },
-        questions: claimDetectionQuestions({ count: batch.length, subject: "assistant_message" }),
-      }).pipe(Effect.mapError(describeJevError));
-      for (const found of detectedClaims(result.answers, batch.length)) {
-        const message = Option.fromUndefinedOr(batch[found.index]);
-        if (Option.isSome(message)) detected.push(toDetectedOpportunity(message.value, found.kind));
-      }
-    }
-    return detected;
-  });
+  detectClaimsInBatches(ask, harness, messages, "assistant_message").pipe(
+    Effect.map((found) =>
+      found.flatMap(([index, claim]) =>
+        Option.match(Option.fromUndefinedOr(messages[index]), {
+          onNone: (): ReadonlyArray<DetectedOpportunity> => [],
+          onSome: (message) => [toDetectedOpportunity(message, claim.kind)],
+        }),
+      ),
+    ),
+  );
 
 /** Add one call's question ids to a session's list, keeping order and uniqueness. */
 const mergeQuestions = (
@@ -705,10 +750,7 @@ const inferCallSessions = (
       );
       attribute("opencode", turns);
     }
-    const piOmpRoots = [
-      { harness: "pi" as const, root: piSessionsDir() },
-      { harness: "omp" as const, root: ompSessionsDir() },
-    ].filter((entry) => wants(entry.harness));
+    const piOmpRoots = piOmpRootsFor(wants);
     for (const { harness, root } of piOmpRoots) {
       const turns = yield* loadPiOmpTurns([{ harness, root }], sinceIso).pipe(
         Effect.mapError((error) => `audit failed: ${error.source}`),
@@ -847,7 +889,7 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     const sinceIso = new Date(now - sinceMs).toISOString();
     const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
 
-    const messages = yield* extractAuditMessages(wants, sinceIso);
+    const messages = yield* harvestHarnesses(wants, sinceIso, "audit failed", auditReaders);
 
     const detected = yield* detectAuditClaims(client.ask, harness, messages);
 
@@ -892,32 +934,12 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     const sinceIso = new Date(now - sinceMs).toISOString();
     const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
 
-    const collected: Array<SessionDigest> = [];
-    if (wants("opencode")) {
-      collected.push(
-        ...(yield* digestOpencode(opencodeDbPath(), sinceIso).pipe(
-          Effect.mapError((error) => `session digest failed: ${error.source}`),
-        )),
-      );
-    }
-    if (wants("claude-code")) {
-      collected.push(
-        ...(yield* digestClaude(claudeProjectsDir(), sinceIso).pipe(
-          Effect.mapError((error) => `session digest failed: ${error.source}`),
-        )),
-      );
-    }
-    const piOmpRoots = [
-      { harness: "pi" as const, root: piSessionsDir() },
-      { harness: "omp" as const, root: ompSessionsDir() },
-    ].filter((entry) => wants(entry.harness));
-    if (piOmpRoots.length > 0) {
-      collected.push(
-        ...(yield* digestPiOmp(piOmpRoots, sinceIso).pipe(
-          Effect.mapError((error) => `session digest failed: ${error.source}`),
-        )),
-      );
-    }
+    const collected = yield* harvestHarnesses(
+      wants,
+      sinceIso,
+      "session digest failed",
+      digestReaders,
+    );
     const digests = collected.slice(0, limit);
     if (dryRun) {
       yield* Effect.sync(() => {
@@ -931,36 +953,6 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     const harness = harnessFromEnv("script");
     const outcomeValues = ["shipped", "blocked", "abandoned", "ongoing"] as const;
     const wasteValues = ["none", "loop", "truncation", "retries", "waiting_on_human"] as const;
-    const pickOutcome = (answer: Answer | undefined): (typeof outcomeValues)[number] =>
-      Option.fromUndefinedOr(answer).pipe(
-        Option.filter(
-          (choice): choice is Extract<Answer, { readonly _tag: "choice" }> =>
-            choice._tag === "choice",
-        ),
-        Option.flatMap((choice) =>
-          Option.fromUndefinedOr(outcomeValues.find((candidate) => candidate === choice.choice)),
-        ),
-        Option.getOrElse((): (typeof outcomeValues)[number] => "ongoing"),
-      );
-    const pickWaste = (answer: Answer | undefined): (typeof wasteValues)[number] =>
-      Option.fromUndefinedOr(answer).pipe(
-        Option.filter(
-          (choice): choice is Extract<Answer, { readonly _tag: "choice" }> =>
-            choice._tag === "choice",
-        ),
-        Option.flatMap((choice) =>
-          Option.fromUndefinedOr(wasteValues.find((candidate) => candidate === choice.choice)),
-        ),
-        Option.getOrElse((): (typeof wasteValues)[number] => "none"),
-      );
-    const scoreOrZero = (answer: Answer | undefined): number =>
-      Option.fromUndefinedOr(answer).pipe(
-        Option.filter(
-          (score): score is Extract<Answer, { readonly _tag: "score" }> => score._tag === "score",
-        ),
-        Option.map((score) => score.score),
-        Option.getOrElse(() => 0),
-      );
 
     let labeled = 0;
     for (let start = 0; start < digests.length; start += 10) {
@@ -968,16 +960,24 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       const result = yield* client
         .ask({ harness, state: { sessions: batch }, questions: labelQuestions(batch) })
         .pipe(Effect.mapError(describeJevError));
+      const pickOutcome = (key: string): (typeof outcomeValues)[number] =>
+        choiceOf(result.answers, key).pipe(
+          Option.flatMap((choice) =>
+            Option.fromUndefinedOr(outcomeValues.find((candidate) => candidate === choice.choice)),
+          ),
+          Option.getOrElse((): (typeof outcomeValues)[number] => "ongoing"),
+        );
+      const pickWaste = (key: string): (typeof wasteValues)[number] =>
+        choiceOf(result.answers, key).pipe(
+          Option.flatMap((choice) =>
+            Option.fromUndefinedOr(wasteValues.find((candidate) => candidate === choice.choice)),
+          ),
+          Option.getOrElse((): (typeof wasteValues)[number] => "none"),
+        );
       for (let index = 0; index < batch.length; index++) {
         const digest = Option.fromUndefinedOr(batch[index]);
         if (Option.isNone(digest)) continue;
-        const outcomeAnswer = result.answers[`s${index}_outcome`];
-        const frictionAnswer = result.answers[`s${index}_friction`];
-        const wasteAnswer = result.answers[`s${index}_waste`];
-        const taskAnswer = Option.fromUndefinedOr(result.answers[`s${index}_task_type`]).pipe(
-          Option.filter(
-            (task): task is Extract<Answer, { readonly _tag: "choice" }> => task._tag === "choice",
-          ),
+        const taskAnswer = choiceOf(result.answers, `s${index}_task_type`).pipe(
           Option.map((task) => task.choice),
           Option.getOrElse(() => "other"),
         );
@@ -988,9 +988,9 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
             ts: new Date(eventTime).toISOString(),
             harness: digest.value.harness,
             sessionID: digest.value.sessionID,
-            outcome: pickOutcome(outcomeAnswer),
-            friction: scoreOrZero(frictionAnswer),
-            waste: pickWaste(wasteAnswer),
+            outcome: pickOutcome(`s${index}_outcome`),
+            friction: scoreValue(result.answers, `s${index}_friction`),
+            waste: pickWaste(`s${index}_waste`),
             taskType: taskAnswer,
             costUsd: digest.value.costUsd,
             tokens: digest.value.tokens,
@@ -1054,6 +1054,22 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
           profile: Option.getOrUndefined(Option.map(spec, () => result.answers)),
         });
       });
+    /** Judge one message and record the verdict; each caller prints it. */
+    const judgeAndRecord = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
+      Effect.gen(function* () {
+        const verdict = yield* judge(rawMessage);
+        const now = yield* Clock.currentTimeMillis;
+        yield* log
+          .append({
+            _tag: "triage",
+            ts: new Date(now).toISOString(),
+            harness,
+            feature: "commit",
+            summary: { passed: verdict.passed ? 1 : 0, failed: verdict.failed.length },
+          })
+          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+        return verdict;
+      });
     const replayFlag = flag(rest, "--replay");
     if (Option.isSome(replayFlag)) {
       const requested = Number.parseInt(replayFlag.value, 10);
@@ -1067,17 +1083,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       });
       for (const commit of commits) {
         const message = `${commit.subject}\n${commit.body}`;
-        const verdict = yield* judge(message);
-        const now = yield* Clock.currentTimeMillis;
-        yield* log
-          .append({
-            _tag: "triage",
-            ts: new Date(now).toISOString(),
-            harness,
-            feature: "commit",
-            summary: { passed: verdict.passed ? 1 : 0, failed: verdict.failed.length },
-          })
-          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+        const verdict = yield* judgeAndRecord(message);
         yield* Effect.sync(() => {
           const reasons = verdict.failed.length > 0 ? ` failed: ${verdict.failed.join(", ")}` : "";
           console.log(`${commit.hash.slice(0, 8)} pass=${verdict.passed}${reasons}`);
@@ -1098,17 +1104,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       try: () => readFile(messageFile.value, "utf8"),
       catch: () => `cannot read message file: ${messageFile.value}`,
     });
-    const verdict = yield* judge(message);
-    const now = yield* Clock.currentTimeMillis;
-    yield* log
-      .append({
-        _tag: "triage",
-        ts: new Date(now).toISOString(),
-        harness,
-        feature: "commit",
-        summary: { passed: verdict.passed ? 1 : 0, failed: verdict.failed.length },
-      })
-      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    const verdict = yield* judgeAndRecord(message);
     yield* Effect.sync(() => {
       console.log(`pass: ${verdict.passed}`);
       if (verdict.failed.length > 0) console.log(`failed: ${verdict.failed.join(", ")}`);
@@ -1313,11 +1309,7 @@ const transcriptFailureText = (
       state: { candidates: maskedCandidates },
       questions: transcriptSelectionQuestions({ candidates: maskedCandidates }),
     }).pipe(Effect.mapError(describeJevError));
-    const index = Option.fromUndefinedOr(selection.answers["failure_index"]).pipe(
-      Option.filter(
-        (answer): answer is Extract<Answer, { readonly _tag: "choice" }> =>
-          answer._tag === "choice",
-      ),
+    const index = choiceOf(selection.answers, "failure_index").pipe(
       Option.map((answer) => Number.parseInt(answer.choice.replace("candidate_", ""), 10)),
       Option.filter((parsed) => !Number.isNaN(parsed)),
       Option.getOrElse(() => -1),
@@ -1382,10 +1374,7 @@ const canonicalFailureFingerprint = (
       },
       questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
     }).pipe(Effect.mapError(describeJevError));
-    const answer = Option.fromUndefinedOr(selection.answers["same_as"]).pipe(
-      Option.filter(
-        (same): same is Extract<Answer, { readonly _tag: "choice" }> => same._tag === "choice",
-      ),
+    const answer = choiceOf(selection.answers, "same_as").pipe(
       Option.map((same) => Number.parseInt(same.choice.replace("recent_", ""), 10)),
       Option.filter((parsed) => !Number.isNaN(parsed)),
       Option.flatMap((parsed) => Option.fromUndefinedOr(similar[parsed])),
@@ -1404,29 +1393,11 @@ const reportFailure = (
   result: AskResult,
 ): Effect.Effect<void, string> =>
   Effect.gen(function* () {
-    const classAnswer = Option.fromUndefinedOr(result.answers["class"]).pipe(
-      Option.filter(
-        (classified): classified is Extract<Answer, { readonly _tag: "choice" }> =>
-          classified._tag === "choice",
-      ),
-    );
-    const blocksAnswer = Option.fromUndefinedOr(result.answers["blocks_work"]).pipe(
-      Option.filter(
-        (blocks): blocks is Extract<Answer, { readonly _tag: "noul" }> => blocks._tag === "noul",
-      ),
-    );
-    const suppressAnswer = Option.fromUndefinedOr(result.answers["safe_to_suppress"]).pipe(
-      Option.filter(
-        (suppress): suppress is Extract<Answer, { readonly _tag: "noul" }> =>
-          suppress._tag === "noul",
-      ),
-    );
-    const blocks = Option.map(blocksAnswer, (answer) => answer.noul).pipe(
-      Option.getOrElse(() => 0),
-    );
-    const suppress = Option.map(suppressAnswer, (answer) => answer.noul).pipe(
-      Option.getOrElse(() => 0),
-    );
+    const classAnswer = choiceOf(result.answers, "class");
+    const blocksAnswer = noulOf(result.answers, "blocks_work");
+    const suppressAnswer = noulOf(result.answers, "safe_to_suppress");
+    const blocks = noulValue(result.answers, "blocks_work");
+    const suppress = noulValue(result.answers, "safe_to_suppress");
     const now = yield* Clock.currentTimeMillis;
     yield* log
       .append({

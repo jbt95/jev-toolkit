@@ -1,6 +1,7 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { Answer, AnswerMap, Question, QuestionMap } from "../core/schema.ts";
+import { choiceOf, noulOf, noulValue, scoreValue } from "../core/answers.ts";
+import type { AnswerMap, Question, QuestionMap } from "../core/schema.ts";
 
 export const Finding = Schema.Struct({
   id: Schema.String,
@@ -85,32 +86,13 @@ export function routeTriage(findings: ReadonlyArray<Finding>, answers: AnswerMap
   const cosmetic: Array<Finding> = [];
   const questions: Array<Finding> = [];
   for (const finding of findings) {
-    const choice = Option.fromUndefinedOr(answers[`f_${finding.id}_class`]).pipe(
-      Option.filter(
-        (classAnswer): classAnswer is Extract<Answer, { readonly _tag: "choice" }> =>
-          classAnswer._tag === "choice",
-      ),
-    );
+    const choice = choiceOf(answers, `f_${finding.id}_class`);
     if (Option.isNone(choice) || choice.value.confidence < CLASS_CONFIDENCE) {
       questions.push(finding);
       continue;
     }
-    const severity = Option.fromUndefinedOr(answers[`f_${finding.id}_severity`]).pipe(
-      Option.filter(
-        (severityAnswer): severityAnswer is Extract<Answer, { readonly _tag: "score" }> =>
-          severityAnswer._tag === "score",
-      ),
-      Option.map((severityAnswer) => severityAnswer.score),
-      Option.getOrElse(() => 0),
-    );
-    const evidence = Option.fromUndefinedOr(answers[`f_${finding.id}_evidence`]).pipe(
-      Option.filter(
-        (evidenceAnswer): evidenceAnswer is Extract<Answer, { readonly _tag: "noul" }> =>
-          evidenceAnswer._tag === "noul",
-      ),
-      Option.map((evidenceAnswer) => evidenceAnswer.noul),
-      Option.getOrElse(() => 0),
-    );
+    const severity = scoreValue(answers, `f_${finding.id}_severity`);
+    const evidence = noulValue(answers, `f_${finding.id}_evidence`);
     if (choice.value.choice === "blocking" || severity >= SERIOUS_SEVERITY) {
       if (evidence >= EVIDENCE_FLOOR) blockers.push(finding);
       else questions.push(finding);
@@ -122,17 +104,11 @@ export function routeTriage(findings: ReadonlyArray<Finding>, answers: AnswerMap
     }
     questions.push(finding);
   }
-  const substantive = Option.fromUndefinedOr(answers["review_substantive"]).pipe(
-    Option.filter(
-      (answer): answer is Extract<Answer, { readonly _tag: "noul" }> => answer._tag === "noul",
-    ),
+  const substantive = noulOf(answers, "review_substantive").pipe(
     Option.map((answer) => answer.noul >= 0.5),
     Option.getOrElse(() => true),
   );
-  const truncated = Option.fromUndefinedOr(answers["truncated"]).pipe(
-    Option.filter(
-      (answer): answer is Extract<Answer, { readonly _tag: "noul" }> => answer._tag === "noul",
-    ),
+  const truncated = noulOf(answers, "truncated").pipe(
     Option.map((answer) => answer.noul >= 0.5),
     Option.getOrElse(() => false),
   );

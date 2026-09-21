@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { callLogger } from "./call-log.ts";
+import { callLogger, type CallLogger } from "./call-log.ts";
 import { EventLog, type EventLogService } from "./events.ts";
 import type { Answer, AnswerMap, Harness, Question, QuestionMap } from "./schema.ts";
 
@@ -219,6 +219,27 @@ export interface JevClientConfig {
   readonly transport: JevTransport;
 }
 
+/** Hint shown when no API key is configured; the CLI prints it verbatim. */
+export const MISSING_API_KEY =
+  "TYPESAFE_API_KEY is not set; export it where the harness process can see it.";
+
+/** Logs the missing-key failure and stops the call; the shared ask preamble. */
+export const requireApiKey = (
+  apiKey: Option.Option<string>,
+  logCall: CallLogger,
+  input: AskInput,
+  model: string,
+): Effect.Effect<void, JevConfigError> =>
+  Option.isSome(apiKey)
+    ? Effect.void
+    : logCall(input, {
+        status: "error",
+        latencyMs: 0,
+        model,
+        error: MISSING_API_KEY,
+        errorTag: "JevConfigError",
+      }).pipe(Effect.flatMap(() => Effect.fail(new JevConfigError())));
+
 export const describeJevError = (error: JevError): string =>
   error._tag === "JevApiError" ? `TypeSafe API error ${error.status}` : error._tag;
 
@@ -234,16 +255,7 @@ export function makeJevClient(
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
 
-      if (Option.isNone(apiKey)) {
-        yield* logCall(input, {
-          status: "error",
-          latencyMs: 0,
-          model,
-          error: "TYPESAFE_API_KEY is not set; export it where the harness process can see it.",
-          errorTag: "JevConfigError",
-        });
-        return yield* Effect.fail(new JevConfigError());
-      }
+      yield* requireApiKey(apiKey, logCall, input, model);
 
       const body = JSON.stringify({
         state: input.state,

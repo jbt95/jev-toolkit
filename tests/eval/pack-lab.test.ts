@@ -34,6 +34,37 @@ const reviewerFixture = async (): Promise<string> =>
     }),
   );
 
+const profileAnswers: AnswerMap = {
+  correctness_applicable: { _tag: "noul", noul: 0.91 },
+  correctness_score: { _tag: "score", score: 2, confidence: 0.7 },
+  security_applicable: { _tag: "noul", noul: 0.83 },
+  security_score: { _tag: "score", score: 4, confidence: 0.66 },
+  top_weakness: { _tag: "choice", choice: "correctness", confidence: 0.6, probabilities: {} },
+};
+
+const profileFixture = async (): Promise<string> =>
+  writeTempFile(
+    "profile-fixtures.json",
+    JSON.stringify({
+      pack: "profile",
+      cases: [
+        {
+          id: "p1",
+          input: {
+            task: "Add a config parser helper.",
+            diff: "+export const parseConfig = (text: string): Config => JSON.parse(text);",
+          },
+          expected: {
+            applicable_dimensions: 2,
+            correctness: 2,
+            security: 4,
+            top_weakness_correctness: 1,
+          },
+        },
+      ],
+    }),
+  );
+
 describe("pack lab", () => {
   it("replays a fixture and reports agreement, tokens, and latency", async () => {
     const fixturePath = await reviewerFixture();
@@ -50,6 +81,24 @@ describe("pack lab", () => {
     expect(report.cases[0]?.meanConfidence).toBeCloseTo(0.85, 5);
     expect(report.inputTokens).toBe(7);
     expect(report.outputTokens).toBe(3);
+  });
+
+  it("replays a profile fixture and reports applicability, scores, and the top weakness", async () => {
+    const fixturePath = await profileFixture();
+    const ask: PackAsk = () => Effect.succeed(askResult(profileAnswers));
+
+    const report = await Effect.runPromise(runPackLab({ fixturePath, repeat: 1 }, ask, "script"));
+
+    expect(report.pack).toBe("profile");
+    expect(report.compared).toBe(1);
+    expect(report.agreed).toBe(1);
+    expect(report.cases[0]?.summary).toMatchObject({
+      applicable_dimensions: 2,
+      correctness: 2,
+      security: 4,
+      top_weakness_correctness: 1,
+    });
+    expect(report.cases[0]?.agreed).toBe(true);
   });
 
   it("exposes answer drift across identical repeats", async () => {

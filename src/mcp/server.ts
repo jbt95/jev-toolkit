@@ -293,31 +293,51 @@ const appendEvent = (
         }).pipe(Effect.orElseSucceed(() => undefined)),
       );
 
-const runAsk = async (config: McpConfig, input: AskInput): Promise<McpToolOutcome> => {
+/** Decodes tool arguments, or reports the decode failure as tool text. */
+const withDecodedArgs = async <A>(
+  toolName: string,
+  decoded: Effect.Effect<A, Schema.SchemaError>,
+  body: (payload: A) => Promise<McpToolOutcome> | McpToolOutcome,
+): Promise<McpToolOutcome> => {
+  const outcome = await Effect.runPromise(Effect.result(decoded));
+  if (outcome._tag === "Failure") {
+    return { ok: false, text: `invalid ${toolName} arguments: ${outcome.failure.message}` };
+  }
+  return await body(outcome.success);
+};
+
+/** Runs one question set through the client, or reports the Jev failure as tool text. */
+const askForTool = async (
+  config: McpConfig,
+  input: AskInput,
+  body: (result: AskResult) => Promise<McpToolOutcome> | McpToolOutcome,
+): Promise<McpToolOutcome> => {
   const outcome = await Effect.runPromise(Effect.result(config.ask(input)));
   if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
-  return { ok: true, text: formatAnswers(outcome.success, input.questions) };
+  return await body(outcome.success);
 };
+
+const runAsk = async (config: McpConfig, input: AskInput): Promise<McpToolOutcome> =>
+  askForTool(config, input, (result) => ({
+    ok: true,
+    text: formatAnswers(result, input.questions),
+  }));
 
 const askTool = (config: McpConfig): McpTool => ({
   name: "typesafe_ask",
   title: "TypeSafe Ask",
   description: ASK_DESCRIPTION,
   inputSchema: ASK_INPUT_SCHEMA,
-  call: async (args) => {
-    const decoded = await Effect.runPromise(Effect.result(decodeAskArgs(args)));
-    if (decoded._tag === "Failure") {
-      return { ok: false, text: `invalid typesafe_ask arguments: ${decoded.failure.message}` };
-    }
-    const payload = decoded.success;
-    return runAsk(config, {
-      harness: config.harness,
-      state: payload.state,
-      questions: payload.questions,
-      model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
-      sessionID: payload.sessionID,
-    });
-  },
+  call: (args) =>
+    withDecodedArgs("typesafe_ask", decodeAskArgs(args), (payload) => {
+      return runAsk(config, {
+        harness: config.harness,
+        state: payload.state,
+        questions: payload.questions,
+        model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+        sessionID: payload.sessionID,
+      });
+    }),
 });
 
 const verifyTool = (config: McpConfig): McpTool => ({
@@ -325,83 +345,75 @@ const verifyTool = (config: McpConfig): McpTool => ({
   title: "TypeSafe Verify",
   description: VERIFY_DESCRIPTION,
   inputSchema: VERIFY_INPUT_SCHEMA,
-  call: async (args) => {
-    const decoded = await Effect.runPromise(Effect.result(decodeVerifyArgs(args)));
-    if (decoded._tag === "Failure") {
-      return { ok: false, text: `invalid typesafe_verify arguments: ${decoded.failure.message}` };
-    }
-    const payload = decoded.success;
-    if (payload.claims.length === 0) {
-      return { ok: false, text: "typesafe_verify needs at least one claim" };
-    }
-    if (payload.claims.length > MAX_CLAIMS) {
-      return { ok: false, text: `typesafe_verify accepts at most ${MAX_CLAIMS} claims per call` };
-    }
-    if (payload.evidence.length > MAX_EVIDENCE_CHARS) {
-      return {
-        ok: false,
-        text: `evidence exceeds ${MAX_EVIDENCE_CHARS} characters; send a focused excerpt`,
-      };
-    }
-    const claims: ReadonlyArray<EvidenceClaim> = payload.claims.map((claim) => ({
-      id: claim.id,
-      text: redact(claim.text),
-    }));
-    const input = { claims, evidence: redact(payload.evidence) };
-    const outcome = await Effect.runPromise(
-      Effect.result(
-        config.ask({
+  call: (args) =>
+    withDecodedArgs("typesafe_verify", decodeVerifyArgs(args), async (payload) => {
+      if (payload.claims.length === 0) {
+        return { ok: false, text: "typesafe_verify needs at least one claim" };
+      }
+      if (payload.claims.length > MAX_CLAIMS) {
+        return { ok: false, text: `typesafe_verify accepts at most ${MAX_CLAIMS} claims per call` };
+      }
+      if (payload.evidence.length > MAX_EVIDENCE_CHARS) {
+        return {
+          ok: false,
+          text: `evidence exceeds ${MAX_EVIDENCE_CHARS} characters; send a focused excerpt`,
+        };
+      }
+      const claims: ReadonlyArray<EvidenceClaim> = payload.claims.map((claim) => ({
+        id: claim.id,
+        text: redact(claim.text),
+      }));
+      const input = { claims, evidence: redact(payload.evidence) };
+      const askInput = {
+        harness: config.harness,
+        state: {
+          claims: claims.map((claim) => ({
+            id: claim.id,
+            text: claim.text,
+            missingNumbers: numbersMissingFromEvidence(claim.text, input.evidence),
+          })),
+          evidence: input.evidence,
+        },
+        questions: evidenceQuestions(input),
+        sessionID: payload.sessionID,
+      } satisfies AskInput;
+      return askForTool(config, askInput, async (result) => {
+        const verdicts = claimVerdicts(result.answers, input);
+        const summary = {
+          claims: verdicts.length,
+          supported: verdicts.filter((verdict) => verdict.verdict === "supported").length,
+          contradicted: verdicts.filter((verdict) => verdict.verdict === "contradicted").length,
+          unrelated: verdicts.filter((verdict) => verdict.verdict === "unrelated").length,
+          insufficient: verdicts.filter((verdict) => verdict.verdict === "insufficient").length,
+          needs_evidence: verdicts.filter((verdict) => verdict.needsEvidence).length,
+        };
+        await appendEvent(config.log, (ts) => ({
+          _tag: "triage",
+          ts,
           harness: config.harness,
-          state: {
-            claims: claims.map((claim) => ({
-              id: claim.id,
-              text: claim.text,
-              missingNumbers: numbersMissingFromEvidence(claim.text, input.evidence),
-            })),
-            evidence: input.evidence,
-          },
-          questions: evidenceQuestions(input),
           sessionID: payload.sessionID,
-        }),
-      ),
-    );
-    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+          feature: "verify",
+          summary,
+        }));
 
-    const verdicts = claimVerdicts(outcome.success.answers, input);
-    const summary = {
-      claims: verdicts.length,
-      supported: verdicts.filter((verdict) => verdict.verdict === "supported").length,
-      contradicted: verdicts.filter((verdict) => verdict.verdict === "contradicted").length,
-      unrelated: verdicts.filter((verdict) => verdict.verdict === "unrelated").length,
-      insufficient: verdicts.filter((verdict) => verdict.verdict === "insufficient").length,
-      needs_evidence: verdicts.filter((verdict) => verdict.needsEvidence).length,
-    };
-    await appendEvent(config.log, (ts) => ({
-      _tag: "triage",
-      ts,
-      harness: config.harness,
-      sessionID: payload.sessionID,
-      feature: "verify",
-      summary,
-    }));
-
-    const lines = verdicts.map((verdict) => {
-      const missing =
-        verdict.missingNumbers.length > 0
-          ? ` [numbers not in evidence: ${verdict.missingNumbers.join(", ")}]`
-          : "";
-      const needs = verdict.needsEvidence ? " [needs evidence]" : "";
-      return `${verdict.id}: ${verdict.verdict} (confidence ${verdict.confidence})${missing}${needs}`;
-    });
-    return {
-      ok: true,
-      text: [
-        `jev ${outcome.success.model}`,
-        ...lines,
-        `usage: ${outcome.success.usage.input} in / ${outcome.success.usage.output} out`,
-      ].join("\n"),
-    };
-  },
+        const lines = verdicts.map((verdict) => {
+          const missing =
+            verdict.missingNumbers.length > 0
+              ? ` [numbers not in evidence: ${verdict.missingNumbers.join(", ")}]`
+              : "";
+          const needs = verdict.needsEvidence ? " [needs evidence]" : "";
+          return `${verdict.id}: ${verdict.verdict} (confidence ${verdict.confidence})${missing}${needs}`;
+        });
+        return {
+          ok: true,
+          text: [
+            `jev ${result.model}`,
+            ...lines,
+            `usage: ${result.usage.input} in / ${result.usage.output} out`,
+          ].join("\n"),
+        };
+      });
+    }),
 });
 
 const reviewTool = (config: McpConfig): McpTool => ({
@@ -409,80 +421,72 @@ const reviewTool = (config: McpConfig): McpTool => ({
   title: "TypeSafe Review",
   description: REVIEW_DESCRIPTION,
   inputSchema: REVIEW_INPUT_SCHEMA,
-  call: async (args) => {
-    const decoded = await Effect.runPromise(Effect.result(decodeReviewArgs(args)));
-    if (decoded._tag === "Failure") {
-      return { ok: false, text: `invalid typesafe_review arguments: ${decoded.failure.message}` };
-    }
-    const payload = decoded.success;
-    const input = sanitizeReviewInput(payload);
-    if (!hasReviewContext(input)) {
-      return {
-        ok: false,
-        text: "typesafe_review needs at least one of task, diff, files, or repositoryContext",
-      };
-    }
-    const stateSize = JSON.stringify(input).length;
-    if (stateSize > MAX_REVIEW_STATE_CHARS) {
-      return {
-        ok: false,
-        text: `review state is ${stateSize} characters; review a focused slice (limit ${MAX_REVIEW_STATE_CHARS})`,
-      };
-    }
-    const outcome = await Effect.runPromise(
-      Effect.result(
-        config.ask({
-          harness: config.harness,
-          state: input,
-          questions: reviewQuestions(input),
-          sessionID: payload.sessionID,
-        }),
-      ),
-    );
-    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
-
-    const evaluation = evaluateReview(input, outcome.success.answers);
-    const dimensions: Record<string, ReviewDimensionResult> = {};
-    for (const dimension of evaluation.dimensions) {
-      dimensions[dimension.dimension] = {
-        applicable: dimension.applicable,
-        score: Option.getOrUndefined(
-          Option.map(Option.fromUndefinedOr(dimension.score), normalizeReviewScore),
-        ),
-        confidence: dimension.confidence,
-        direction: dimension.direction,
-      };
-    }
-    await appendEvent(config.log, (ts) => ({
-      _tag: "review",
-      ts,
-      harness: config.harness,
-      sessionID: payload.sessionID,
-      model: outcome.success.model,
-      dimensions,
-      topWeakness: evaluation.topWeakness,
-    }));
-
-    return {
-      ok: true,
-      text: JSON.stringify(
-        {
-          model: outcome.success.model,
-          dimensions: evaluation.dimensions.map((dimension) => ({
-            dimension: dimension.dimension,
+  call: (args) =>
+    withDecodedArgs("typesafe_review", decodeReviewArgs(args), async (payload) => {
+      const input = sanitizeReviewInput(payload);
+      if (!hasReviewContext(input)) {
+        return {
+          ok: false,
+          text: "typesafe_review needs at least one of task, diff, files, or repositoryContext",
+        };
+      }
+      const stateSize = JSON.stringify(input).length;
+      if (stateSize > MAX_REVIEW_STATE_CHARS) {
+        return {
+          ok: false,
+          text: `review state is ${stateSize} characters; review a focused slice (limit ${MAX_REVIEW_STATE_CHARS})`,
+        };
+      }
+      const askInput = {
+        harness: config.harness,
+        state: input,
+        questions: reviewQuestions(input),
+        sessionID: payload.sessionID,
+      } satisfies AskInput;
+      return askForTool(config, askInput, async (result) => {
+        const evaluation = evaluateReview(input, result.answers);
+        const dimensions: Record<string, ReviewDimensionResult> = {};
+        for (const dimension of evaluation.dimensions) {
+          dimensions[dimension.dimension] = {
             applicable: dimension.applicable,
-            score: dimension.score ?? null,
-            confidence: dimension.confidence ?? null,
-            direction: dimension.direction ?? null,
-          })),
+            score: Option.getOrUndefined(
+              Option.map(Option.fromUndefinedOr(dimension.score), normalizeReviewScore),
+            ),
+            confidence: dimension.confidence,
+            direction: dimension.direction,
+          };
+        }
+        await appendEvent(config.log, (ts) => ({
+          _tag: "review",
+          ts,
+          harness: config.harness,
+          sessionID: payload.sessionID,
+          model: result.model,
+          dimensions,
           topWeakness: evaluation.topWeakness,
-          usage: { input: outcome.success.usage.input, output: outcome.success.usage.output },
-        },
-        null,
-        2,
-      ),
-    };
-  },
+        }));
+
+        return {
+          ok: true,
+          text: JSON.stringify(
+            {
+              model: result.model,
+              dimensions: evaluation.dimensions.map((dimension) => ({
+                dimension: dimension.dimension,
+                applicable: dimension.applicable,
+                score: dimension.score ?? null,
+                confidence: dimension.confidence ?? null,
+                direction: dimension.direction ?? null,
+              })),
+              topWeakness: evaluation.topWeakness,
+              usage: { input: result.usage.input, output: result.usage.output },
+            },
+            null,
+            2,
+          ),
+        };
+      });
+    }),
 });
 
 const skillRouteTool = (config: McpConfig): McpTool => ({
@@ -490,78 +494,67 @@ const skillRouteTool = (config: McpConfig): McpTool => ({
   title: "TypeSafe Skill Route",
   description: SKILL_ROUTE_DESCRIPTION,
   inputSchema: SKILL_ROUTE_INPUT_SCHEMA,
-  call: async (args) => {
-    const decoded = await Effect.runPromise(Effect.result(decodeSkillRouteArgs(args)));
-    if (decoded._tag === "Failure") {
-      return {
-        ok: false,
-        text: `invalid typesafe_skill_route arguments: ${decoded.failure.message}`,
+  call: (args) =>
+    withDecodedArgs("typesafe_skill_route", decodeSkillRouteArgs(args), async (payload) => {
+      if (payload.skills.length === 0) {
+        return { ok: false, text: "typesafe_skill_route needs at least one candidate skill" };
+      }
+      if (payload.skills.length > MAX_SKILLS) {
+        return {
+          ok: false,
+          text: `typesafe_skill_route accepts at most ${MAX_SKILLS} candidates per call`,
+        };
+      }
+      const input = {
+        task: clip(stripFencedCode(redact(payload.task)), MAX_TASK_CHARS),
+        candidates: payload.skills.map((skill) => ({
+          name: skill.name,
+          description: clip(redact(skill.description), MAX_CRITERION_CHARS),
+        })),
       };
-    }
-    const payload = decoded.success;
-    if (payload.skills.length === 0) {
-      return { ok: false, text: "typesafe_skill_route needs at least one candidate skill" };
-    }
-    if (payload.skills.length > MAX_SKILLS) {
-      return {
-        ok: false,
-        text: `typesafe_skill_route accepts at most ${MAX_SKILLS} candidates per call`,
-      };
-    }
-    const input = {
-      task: clip(stripFencedCode(redact(payload.task)), MAX_TASK_CHARS),
-      candidates: payload.skills.map((skill) => ({
-        name: skill.name,
-        description: clip(redact(skill.description), MAX_CRITERION_CHARS),
-      })),
-    };
-    const outcome = await Effect.runPromise(
-      Effect.result(
-        config.ask({
+      const askInput = {
+        harness: config.harness,
+        state: {
+          task: input.task,
+          skills: input.candidates.map((candidate) => ({
+            name: candidate.name,
+            description: candidate.description,
+          })),
+        },
+        questions: skillRouteQuestions(input),
+        sessionID: payload.sessionID,
+      } satisfies AskInput;
+      return askForTool(config, askInput, async (result) => {
+        const route = skillRoute(input, result.answers);
+        await appendEvent(config.log, (ts) => ({
+          _tag: "route",
+          ts,
           harness: config.harness,
-          state: {
-            task: input.task,
-            skills: input.candidates.map((candidate) => ({
-              name: candidate.name,
-              description: candidate.description,
-            })),
-          },
-          questions: skillRouteQuestions(input),
           sessionID: payload.sessionID,
-        }),
-      ),
-    );
-    if (outcome._tag === "Failure") return { ok: false, text: describeJevError(outcome.failure) };
+          outcome: route._tag === "routed" ? "routed" : "none",
+          reason: route._tag === "routed" ? undefined : route.reason,
+          skill: route._tag === "routed" ? route.skill : undefined,
+          candidates: input.candidates.length,
+          confidence: route.confidence,
+          dependence: route.dependence,
+        }));
 
-    const route = skillRoute(input, outcome.success.answers);
-    await appendEvent(config.log, (ts) => ({
-      _tag: "route",
-      ts,
-      harness: config.harness,
-      sessionID: payload.sessionID,
-      outcome: route._tag === "routed" ? "routed" : "none",
-      reason: route._tag === "routed" ? undefined : route.reason,
-      skill: route._tag === "routed" ? route.skill : undefined,
-      candidates: input.candidates.length,
-      confidence: route.confidence,
-      dependence: route.dependence,
-    }));
-
-    const decision =
-      route._tag === "routed"
-        ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
-        : `load: nothing (${route.reason})`;
-    return {
-      ok: true,
-      text: [
-        `jev ${outcome.success.model}`,
-        decision,
-        `confidence: ${route.confidence}`,
-        `dependence: ${route.dependence}`,
-        `usage: ${outcome.success.usage.input} in / ${outcome.success.usage.output} out`,
-      ].join("\n"),
-    };
-  },
+        const decision =
+          route._tag === "routed"
+            ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
+            : `load: nothing (${route.reason})`;
+        return {
+          ok: true,
+          text: [
+            `jev ${result.model}`,
+            decision,
+            `confidence: ${route.confidence}`,
+            `dependence: ${route.dependence}`,
+            `usage: ${result.usage.input} in / ${result.usage.output} out`,
+          ].join("\n"),
+        };
+      });
+    }),
 });
 
 export function createMcpDeps(config: McpConfig): McpDeps {

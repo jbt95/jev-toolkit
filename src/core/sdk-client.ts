@@ -33,6 +33,7 @@ import {
   JevTransportError,
   answersCoverQuestions,
   describeJevError,
+  requireApiKey,
   type AskInput,
   type AskResult,
   type JevClientService,
@@ -154,16 +155,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
 
-      if (Option.isNone(apiKey)) {
-        yield* logCall(input, {
-          status: "error",
-          latencyMs: 0,
-          model,
-          error: "TYPESAFE_API_KEY is not set; export it where the harness process can see it.",
-          errorTag: "JevConfigError",
-        });
-        return yield* Effect.fail(new JevConfigError());
-      }
+      yield* requireApiKey(apiKey, logCall, input, model);
 
       const converted = toSdkQuestions(input.questions);
       if (Option.isNone(converted)) {
@@ -179,7 +171,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
       const sdkQuestions = converted.value;
 
       const options: SdkClientOptions = {
-        apiKey: apiKey.value,
+        apiKey: Option.getOrThrow(apiKey),
       };
       const withEndpoint =
         config.baseURL === undefined ? options : { ...options, baseURL: config.baseURL };

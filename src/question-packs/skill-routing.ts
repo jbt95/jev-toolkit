@@ -1,7 +1,7 @@
 import * as Option from "effect/Option";
-import { noulValue } from "../core/answers.ts";
+import { choiceOf, noulValue, scoreValue } from "../core/answers.ts";
 import type { SkillCandidate } from "../core/skills.ts";
-import type { Answer, AnswerMap, QuestionMap } from "../core/schema.ts";
+import type { AnswerMap, QuestionMap } from "../core/schema.ts";
 
 /**
  * Skill routing: the caller supplies its skill catalog, Jev picks the one that
@@ -94,26 +94,6 @@ export type SkillRoute =
       readonly dependence: number;
     };
 
-const choiceConfidence = (
-  answers: AnswerMap,
-  key: string,
-): Option.Option<readonly [string, number]> =>
-  Option.fromUndefinedOr(answers[key]).pipe(
-    Option.filter(
-      (answer): answer is Extract<Answer, { readonly _tag: "choice" }> => answer._tag === "choice",
-    ),
-    Option.map((answer) => [answer.choice, answer.confidence] as const),
-  );
-
-const scoreValue = (answers: AnswerMap, key: string): number =>
-  Option.fromUndefinedOr(answers[key]).pipe(
-    Option.filter(
-      (answer): answer is Extract<Answer, { readonly _tag: "score" }> => answer._tag === "score",
-    ),
-    Option.map((answer) => answer.score),
-    Option.getOrElse(() => 0),
-  );
-
 /**
  * Apply the routing policy to the answers. A pick is used only when it names a
  * real candidate, clears the confidence floor, and clears the dependence floor;
@@ -124,7 +104,9 @@ export const skillRoute = (
   answers: AnswerMap,
   floors: SkillRouteFloors = DEFAULT_FLOORS,
 ): SkillRoute => {
-  const chosen = choiceConfidence(answers, "skill");
+  const chosen = choiceOf(answers, "skill").pipe(
+    Option.map((answer) => [answer.choice, answer.confidence] as const),
+  );
   if (Option.isNone(chosen)) {
     return {
       _tag: "none",

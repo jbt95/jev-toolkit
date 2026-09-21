@@ -13,10 +13,14 @@ describe("formatAnswers verdict words", () => {
       result({
         a: { _tag: "noul", noul: 0.73 },
         b: { _tag: "noul", noul: 0.51 },
+        c: { _tag: "noul", noul: 0.3 },
+        d: { _tag: "noul", noul: 0.1 },
       }),
     );
     expect(text).toContain("a: p(yes)=0.73 — likely yes");
     expect(text).toContain("b: p(yes)=0.51 — toss-up");
+    expect(text).toContain("c: p(yes)=0.3 — likely no");
+    expect(text).toContain("d: p(yes)=0.1 — very likely no");
   });
 
   it("resolves a score against its ordered levels", () => {

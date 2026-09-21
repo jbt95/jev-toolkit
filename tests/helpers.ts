@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,6 +223,35 @@ export const withPath = async <T>(dir: string, fn: () => Promise<T>): Promise<T>
   } finally {
     process.env.PATH = previous;
   }
+};
+
+/** Free TCP port on 127.0.0.1, found by probing port 0. */
+export const freePort = async (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const probe = createNetServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null) {
+        reject(new Error("probe did not bind"));
+        return;
+      }
+      // SAFETY: a TCP server listening on 127.0.0.1 reports an AddressInfo.
+      const info = address as AddressInfo;
+      probe.close(() => resolve(info.port));
+    });
+  });
+
+/** Poll an HTTP url until it answers (80 attempts, 25 ms apart). */
+export const waitFor = async (url: string): Promise<Response> => {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      return await fetch(url);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error(`server did not start: ${url}`);
 };
 
 export interface FakeApi {

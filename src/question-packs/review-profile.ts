@@ -1,7 +1,7 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { noulValue } from "../core/answers.ts";
-import type { Answer, AnswerMap, Question, QuestionMap } from "../core/schema.ts";
+import { choiceOf, noulValue, scoreOf } from "../core/answers.ts";
+import type { AnswerMap, Question, QuestionMap } from "../core/schema.ts";
 import { clip, redact } from "../core/text.ts";
 
 /**
@@ -277,16 +277,8 @@ export const evaluateReview = (input: ReviewInput, answers: AnswerMap): ReviewOu
     if (!applicable) {
       return { dimension, label: DIMENSION_LABELS[dimension], applicable: false };
     }
-    const scoreAnswer = Option.fromUndefinedOr(answers[`${dimension}_score`]).pipe(
-      Option.filter(
-        (answer): answer is Extract<Answer, { readonly _tag: "score" }> => answer._tag === "score",
-      ),
-    );
-    const direction = Option.fromUndefinedOr(answers[`${dimension}_direction`]).pipe(
-      Option.filter(
-        (answer): answer is Extract<Answer, { readonly _tag: "choice" }> =>
-          answer._tag === "choice",
-      ),
+    const scoreAnswer = scoreOf(answers, `${dimension}_score`);
+    const direction = choiceOf(answers, `${dimension}_direction`).pipe(
       Option.filter(() => previous.has(dimension)),
       Option.flatMap((answer) =>
         Option.fromUndefinedOr(DIRECTION_VALUES.find((candidate) => candidate === answer.choice)),
@@ -303,10 +295,7 @@ export const evaluateReview = (input: ReviewInput, answers: AnswerMap): ReviewOu
       direction: Option.getOrUndefined(direction),
     };
   });
-  const topWeakness = Option.fromUndefinedOr(answers["top_weakness"]).pipe(
-    Option.filter(
-      (answer): answer is Extract<Answer, { readonly _tag: "choice" }> => answer._tag === "choice",
-    ),
+  const topWeakness = choiceOf(answers, "top_weakness").pipe(
     Option.map((answer) => answer.choice),
     Option.getOrElse(() => "none_material"),
   );

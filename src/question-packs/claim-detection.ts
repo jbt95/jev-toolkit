@@ -1,8 +1,7 @@
 import * as Option from "effect/Option";
-import { noulValue } from "../core/answers.ts";
+import { choiceOf, noulValue } from "../core/answers.ts";
 import {
   CLAIM_KINDS,
-  type Answer,
   type AnswerMap,
   type ClaimKind,
   type Question,
@@ -75,11 +74,7 @@ export const detectedClaims = (
   const found: Array<DetectedClaim> = [];
   for (let index = 0; index < count; index += 1) {
     if (noulValue(answers, `m${index}_claim`) < threshold) continue;
-    const kind = Option.fromUndefinedOr(answers[`m${index}_kind`]).pipe(
-      Option.filter(
-        (kindAnswer): kindAnswer is Extract<Answer, { readonly _tag: "choice" }> =>
-          kindAnswer._tag === "choice",
-      ),
+    const kind = choiceOf(answers, `m${index}_kind`).pipe(
       Option.flatMap((kindAnswer) =>
         Option.fromUndefinedOr(CLAIM_KINDS.find((candidate) => candidate === kindAnswer.choice)),
       ),

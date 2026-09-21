@@ -94,6 +94,21 @@ const histogramLines = (
 const sorted = <T>(map: ReadonlyMap<string, T>): ReadonlyArray<readonly [string, T]> =>
   [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+/** One counter family with a by-harness line per map entry. */
+const harnessCounter = <A>(
+  name: string,
+  help: string,
+  entries: ReadonlyMap<string, A>,
+  value: (entry: A, harness: string) => number,
+): MetricFamily => ({
+  name,
+  help,
+  type: "counter",
+  lines: sorted(entries).map(([harness, entry]) =>
+    sample(name, [["harness", harness]], value(entry, harness)),
+  ),
+});
+
 /**
  * A counter or gauge family over a `label|label` keyed map: the key splits into
  * label values in order and the map value becomes the sample. Families that
@@ -484,35 +499,27 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         ),
       ]),
     },
-    {
-      name: "jev_sessions_with_calls_total",
-      help: "Sessions with at least one Jev call, by harness.",
-      type: "counter",
-      lines: sorted(sessions).map(([harness, set]) =>
-        sample("jev_sessions_with_calls_total", [["harness", harness]], set.size),
-      ),
-    },
-    {
-      name: "jev_labeled_sessions_with_calls_total",
-      help: "Labeled sessions that also recorded at least one Jev call, by harness.",
-      type: "counter",
-      lines: sorted(labeledSessions).map(([harness, set]) => {
+    harnessCounter(
+      "jev_sessions_with_calls_total",
+      "Sessions with at least one Jev call, by harness.",
+      sessions,
+      (set) => set.size,
+    ),
+    harnessCounter(
+      "jev_labeled_sessions_with_calls_total",
+      "Labeled sessions that also recorded at least one Jev call, by harness.",
+      labeledSessions,
+      (set, harness) => {
         const called = sessions.get(harness) ?? new Set<string>();
-        return sample(
-          "jev_labeled_sessions_with_calls_total",
-          [["harness", harness]],
-          [...set].filter((sessionID) => called.has(sessionID)).length,
-        );
-      }),
-    },
-    {
-      name: "jev_labeled_sessions_total",
-      help: "Distinct labeled sessions by harness.",
-      type: "counter",
-      lines: sorted(labeledSessions).map(([harness, set]) =>
-        sample("jev_labeled_sessions_total", [["harness", harness]], set.size),
-      ),
-    },
+        return [...set].filter((sessionID) => called.has(sessionID)).length;
+      },
+    ),
+    harnessCounter(
+      "jev_labeled_sessions_total",
+      "Distinct labeled sessions by harness.",
+      labeledSessions,
+      (set) => set.size,
+    ),
     {
       name: "jev_opportunities_total",
       help: "Detected quantitative claims, matched to Jev usage or missed.",

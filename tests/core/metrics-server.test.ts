@@ -2,38 +2,9 @@ import { describe, expect, it } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { EventLogError, makeEventLog, type EventLogService } from "@/core/events.ts";
 import { serveMeter } from "@/core/metrics.ts";
-import { tempEventsPath } from "../helpers.ts";
-
-const freePort = async (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null) {
-        reject(new Error("probe did not bind"));
-        return;
-      }
-      // SAFETY: a TCP server listening on 127.0.0.1 reports an AddressInfo.
-      const info = address as AddressInfo;
-      probe.close(() => resolve(info.port));
-    });
-  });
-
-const waitFor = async (url: string): Promise<Response> => {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      return await fetch(url);
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  throw new Error(`server did not start: ${url}`);
-};
+import { freePort, tempEventsPath, waitFor } from "../helpers.ts";
 
 const failingLog: EventLogService = {
   append: () => Effect.void,
