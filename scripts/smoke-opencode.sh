@@ -238,6 +238,27 @@ if [ "$run_operator" -eq 1 ]; then
   check_contains "tools/list: typesafe_ask" "typesafe_ask" "$tools"
   check_contains "tools/list: typesafe_verify" "typesafe_verify" "$tools"
   check_contains "tools/list: typesafe_review" "typesafe_review" "$tools"
+  check_contains "tools/list: typesafe_skill_route" "typesafe_skill_route" "$tools"
+
+  echo "== skill route (mcp) =="
+  route_req='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"typesafe_skill_route","arguments":{"task":"the settings dialog crashes on save; fix the root cause and then polish its spacing","skills":[{"name":"debugging","description":"Systematic root-cause debugging for failures and errors."},{"name":"better-ui","description":"UI polish: concentric radius, spacing, hit areas, surface depth."}]}}}'
+  route_out=$(printf '%s\n%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}' \
+    "$route_req" | jev mcp | tail -n 1)
+  route_text=$(printf '%s' "$route_out" | jq -r '.result.content[0].text' 2>/dev/null)
+  check_contains "skill route answers with a decision" "load: " "$route_text"
+  case "$route_text" in
+    *"load: nothing"*)
+      echo "  FAIL skill route declined a two-skill task"
+      failures=$((failures + 1))
+      ;;
+    *)
+      echo "  PASS skill route loaded a skill"
+      pass=$((pass + 1))
+      ;;
+  esac
+  route_events=$(jq -s '[.[] | select(._tag=="route")] | length' "$JEV_DATA_DIR/events.jsonl")
+  check_ge "route events are logged" 1 "$route_events"
 
   echo "== ask, events, hook =="
   ask_out=$(printf '%s' \
@@ -294,6 +315,16 @@ EOF
   check_contains "pack lab runs" "pack commit" "$eval_out"
   check_contains "pack lab agrees with the fixture" "agreed=1" "$eval_out"
 
+  echo "== eval baseline gate =="
+  jev eval pack --fixtures "$root/fixtures.json" --json > "$root/baseline.json"
+  set +e
+  baseline_out=$(jev eval pack --fixtures "$root/fixtures.json" \
+    --baseline "$root/baseline.json" --fail-on regression)
+  baseline_status=$?
+  set -e
+  check_eq "baseline gate exits 0 on a matching run" 0 "$baseline_status"
+  check_contains "baseline gate reports no regressions" "regressions: none" "$baseline_out"
+
   echo "== audit, label =="
   audit_out=$(jev audit run --since 1h --harness opencode --dry-run)
   check_contains "audit run scans opencode" "opencode" "$audit_out"
@@ -301,6 +332,34 @@ EOF
   check_contains "audit prompts measures the trigger" "prompts=" "$prompts_out"
   label_out=$(jev label sessions --since 1h --harness opencode --dry-run)
   check_contains "label sessions digests" '"sessions"' "$label_out"
+
+  echo "== impact, doctor, strict filters =="
+  impact_out=$(jev impact --json)
+  impact_calls=$(printf '%s' "$impact_out" | jq -r '.coverage.callEvents')
+  check_ge "impact counts the smoke's calls" 1 "$impact_calls"
+  check_contains "impact reports cohorts" '"comparisons"' "$impact_out"
+
+  set +e
+  doctor_out=$(jev doctor --json)
+  doctor_status=$?
+  set -e
+  check_eq "doctor exits 0 on a wired install" 0 "$doctor_status"
+  check_contains "doctor checks the api key" '"api_key"' "$doctor_out"
+  check_contains "doctor checks the session stores" '"session_stores"' "$doctor_out"
+
+  set +e
+  jev events --type bogus >/dev/null 2>&1
+  bad_type_status=$?
+  jev events --since nonsense >/dev/null 2>&1
+  bad_since_status=$?
+  jev audit run --harness bogus --dry-run >/dev/null 2>&1
+  bad_harness_status=$?
+  set -e
+  check_eq "unknown --type exits 1" 1 "$bad_type_status"
+  check_eq "malformed --since exits 1" 1 "$bad_since_status"
+  check_eq "unknown --harness exits 1" 1 "$bad_harness_status"
+  typed_out=$(jev events --type call --n 3)
+  check_contains "events filter by type" '"call"' "$typed_out"
 
   echo "== meter =="
   port=$((18000 + ($$ % 1000)))

@@ -182,11 +182,28 @@ export const RouteEvent = Schema.TaggedStruct("route", {
   ),
   /** Chosen skill name when routed; a taxonomy label, never user text. */
   skill: Schema.optional(Schema.String),
+  /**
+   * The ordered chain when a follow-up selection routed; `skill` stays the
+   * first pick for consumers written before chains existed.
+   */
+  skills: Schema.optional(Schema.Array(Schema.String)),
   candidates: Schema.Number,
   confidence: Schema.Number,
   dependence: Schema.Number,
 });
 export type RouteEvent = Schema.Schema.Type<typeof RouteEvent>;
+
+/** Discriminator tags of every persisted event kind, for filters and tooling. */
+export const EventTag = Schema.Literals([
+  "call",
+  "opportunity",
+  "triage",
+  "session_label",
+  "review",
+  "attribution",
+  "route",
+]);
+export type EventTag = Schema.Schema.Type<typeof EventTag>;
 
 export const JevEvent = Schema.Union([
   CallEvent,

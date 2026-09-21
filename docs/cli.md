@@ -26,7 +26,8 @@ jev meter serve [--port 8788]            # Prometheus metrics
 | Item | Behavior |
 |---|---|
 | Harness tag | Commands default to `cli` (triage) or `script` (check, audit, label); override with `JEV_HARNESS` |
-| Time windows | `--since` accepts `Nh` (hours) or `Nd` (days); defaults are per command |
+| Time windows | `--since` accepts `Nh` (hours) or `Nd` (days); defaults are per command. A malformed window is a usage error, never a silent default |
+| Filters | `--harness` accepts a harness tag or `all`; an unknown value is a usage error, never a silently widened report |
 | Invalid input | Decoded with Effect Schema; malformed payloads fail with a usage-style message and exit 1 |
 | Exit codes | `0` success · `1` usage/input errors and failed commit verdicts · triage commands stay `0` after a successful classification |
 | Output | Human-readable lines on stdout; errors on stderr; JSONL only from `jev events` |
@@ -128,9 +129,14 @@ flowchart LR
   CAT["--skills-dir DIR<br/>SKILL.md front matter<br/>or --skills FILE"] --> Q["Jev: one choice over the catalog<br/>+ second-skill noul + dependence score"]
   TASK["--task"] --> Q
   Q --> FLOORS{"confidence ≥ 0.5<br/>and dependence ≥ 2?"}
-  FLOORS -->|yes| LOAD["load: <skill>"]
+  FLOORS -->|yes| SECOND{"second skill helps<br/>and a candidate remains?"}
   FLOORS -->|no| NONE["load: nothing (reason)"]
-  LOAD & NONE --> EV["route event: outcome · skill · candidates"]
+  SECOND -->|yes| Q2["Jev: one more choice over<br/>the remaining candidates"]
+  Q2 --> FLOORS2{"floors again?"}
+  FLOORS2 -->|yes| CHAIN["load: a, then b"]
+  FLOORS2 -->|no| ONE["load: a<br/>second: none (reason)"]
+  SECOND -->|no| ONE
+  CHAIN & ONE & NONE --> EV["route event: outcome · skill · skills · candidates"]
 ```
 
 The catalog is the caller's. Jev cannot pick a skill that was not passed, so the
@@ -138,6 +144,13 @@ directory scan reads every `SKILL.md` under `DIR` (front matter `name` and
 `description`; multi-line descriptions are folded). A missing or empty catalog
 exits 1. Decline reasons are `no-match`, `low-confidence`, `low-dependence`, and
 `unknown-skill`; `--dry-run` prints the decision without writing a `route` event.
+
+When the second-skill gate fires and another candidate remains, one more
+question set runs over the remaining skills and the same floors apply again, so
+a chain is at most two skills. A follow-up that declines prints
+`second: none (reason)`; a follow-up call that fails keeps the first skill and
+prints `second: unavailable (...)`. The `route` event carries the ordered chain
+in `skills`, with `skill` still holding the first pick.
 
 ## check commit — commit conformance
 
@@ -219,10 +232,54 @@ of 10: outcome (`shipped`/`blocked`/`abandoned`/`ongoing`), friction score
 `review`, `analysis`, `release`, `content`, `other`). Appends `session_label`
 events. `--dry-run` prints the digests as JSON without calling Jev.
 
+## impact report — assisted versus unassisted sessions
+
+```console
+jev impact [--since 7d] [--harness H] [--json]
+```
+
+Reads the local event log and compares identified labeled sessions with and
+without Jev calls. Cohorts are grouped by harness and task type.
+
+The report includes outcome counts, friction, waste, observed cost, tool
+errors, stop reasons, and attribution coverage. It also reports labels with
+missing digest facts. Anonymous labels remain in coverage but cannot join a
+cohort.
+
+`--harness` limits the report to one supported harness. `--json` emits the
+same report as a stable JSON object for scripts. Session identifiers and raw
+session text never appear in the report. The comparisons are observational and
+do not prove that Jev caused an outcome.
+
+## doctor — local setup and health
+
+```console
+jev doctor [--json] [--meter-port N]
+```
+
+Checks the local installation and prints one line per check with `ok`, `warn`,
+or `fail`:
+
+| Check | Fails when | Warns when |
+|---|---|---|
+| `node` | the runtime is below Node 26 | — |
+| `api_key` | `TYPESAFE_API_KEY` is unset (every call would fail) | — |
+| `event_log` | the log has malformed lines the meter skips | the log is empty |
+| `meter` | the meter reports malformed log lines | the meter is unreachable (`unreachable` or `status` in the detail), or serves a stale log view |
+| `session_stores` | a store cannot be read (permissions, I/O) | no harness session store exists |
+
+`--meter-port` (or `JEV_METER_PORT`) selects the meter port; the probe reads
+`127.0.0.1` only. Exit code `0` when no check fails, `1` otherwise, so the
+command works as an install-and-health gate. `--json` emits
+`{ checks, failures, warnings }`.
+
+Run it after installs, after harness wiring changes, and when a dashboard looks
+wrong.
+
 ## eval pack — replay labeled fixtures
 
 ```console
-jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--json]
+jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--baseline FILE] [--fail-on regression|drift] [--json]
 ```
 
 Fixtures are one JSON file:
@@ -248,14 +305,46 @@ drift is visible before thresholds are trusted; `--model` pins a version for
 comparison; `--json` prints the report as JSON. Each run's Jev calls also append
 `call` events to the local log.
 
+### Baseline gate
+
+Save a run and compare later runs against it:
+
+```console
+jev eval pack --fixtures FILE --json > baseline.json   # capture once
+jev eval pack --fixtures FILE --baseline baseline.json --fail-on regression
+```
+
+`--baseline FILE` decodes a saved `--json` report and compares by case id. The
+comparison reports shared, new, and missing cases plus two kinds of change:
+
+- **regression** — a case the baseline satisfied whose expectations the run now
+  misses. Changing the model, a prompt, or a threshold can cause one.
+- **drift** — a numeric summary value that changed for a case present in both
+  reports, whether or not the expectation is still met.
+
+`--fail-on regression` exits `1` when any case regressed; `--fail-on drift`
+exits `1` on a regression or any drift, which is the stricter gate for CI.
+Without `--fail-on` the comparison is printed and the exit code stays `0`.
+A baseline from a different pack than the fixture is rejected. With `--json` and
+a baseline the output is `{ report, baseline }`; without one it stays the report.
+
+Baselines are evidence, not policy: keep the fixture file and the gate
+thresholds under review, and run the pack offline-safe fixtures before trusting
+a floor change.
+
 ## events — inspect the log
 
 ```console
-jev events [--harness H] [--n 10]
+jev events [--n 10] [--harness H] [--since 24h] [--type T] [--session ID]
 ```
 
-Prints the last `--n` events (default 10) as JSONL. The log is a single file;
-see [architecture.md](architecture.md#event-log) for the schema.
+Prints the last `--n` matching events (default 10) as JSONL. Filters combine:
+`--harness` takes a harness tag or `all`, `--since` takes an `Nh`/`Nd` window,
+`--type` takes an event tag (`call`, `opportunity`, `triage`, `session_label`,
+`review`, `attribution`, `route`), and `--session` matches one session id. An
+unknown harness, type, or window is a usage error that exits 1 — a filter is
+never silently dropped. The log is a single file; see
+[architecture.md](architecture.md#event-log) for the schema.
 
 ## hook prompt — harness hook adapter
 

@@ -65,6 +65,53 @@ const routeAnswers = (input: AskInput): AnswerMap => {
   return answers;
 };
 
+/** A `typesafe_skill_route` call with two candidates and the given task. */
+const routeCall = (id: number, task: string): string =>
+  request({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: {
+      name: "typesafe_skill_route",
+      arguments: {
+        task,
+        skills: [
+          { name: "debugging", description: "Root-cause work for failures." },
+          { name: "better-ui", description: "UI polish." },
+        ],
+      },
+    },
+  });
+
+/**
+ * Route answers for a two-step chain: the first set routes `debugging` with the
+ * second gate open, the follow-up set answers the given pick.
+ */
+const chainAnswers = (
+  followUp: { readonly choice: string; readonly confidence: number; readonly score: number },
+  input: AskInput,
+): AnswerMap =>
+  Object.keys(input.questions).includes("second")
+    ? { ...routeAnswers(input), second: { _tag: "noul", noul: 0.91 } }
+    : {
+        skill: {
+          _tag: "choice",
+          choice: followUp.choice,
+          confidence: followUp.confidence,
+          probabilities: {},
+        },
+        dependence: { _tag: "score", score: followUp.score, confidence: 0.7 },
+      };
+
+/**
+ * Route answers where the follow-up call fails: the first set still routes
+ * `debugging` with the second gate open, the second set fails.
+ */
+const failingFollowUpAnswers = (input: AskInput): Effect.Effect<AskResult, JevConfigError> =>
+  Object.keys(input.questions).includes("second")
+    ? Effect.succeed(askResult({ ...routeAnswers(input), second: { _tag: "noul", noul: 0.91 } }))
+    : Effect.fail(new JevConfigError());
+
 describe("MCP server", () => {
   it("answers initialize, echoing the requested protocol version and listing tools", async () => {
     const deps = createMcpDeps({ harness: "script", ask: () => Effect.never });
@@ -137,24 +184,7 @@ describe("MCP server", () => {
       log,
     });
 
-    const response = await handleMcpRequest(
-      request({
-        jsonrpc: "2.0",
-        id: 8,
-        method: "tools/call",
-        params: {
-          name: "typesafe_skill_route",
-          arguments: {
-            task: "the export button spins forever",
-            skills: [
-              { name: "debugging", description: "Root-cause work for failures." },
-              { name: "better-ui", description: "UI polish." },
-            ],
-          },
-        },
-      }),
-      deps,
-    );
+    const response = await handleMcpRequest(routeCall(8, "the export button spins forever"), deps);
 
     const parsed = JSON.parse(String(response));
     expect(parsed.result.isError).toBeUndefined();
@@ -168,6 +198,46 @@ describe("MCP server", () => {
       skill: "debugging",
       candidates: 2,
     });
+  });
+
+  it("loads a second skill when the follow-up clears the floors", async () => {
+    const path = await tempEventsPath();
+    const log = makeEventLog(path);
+    const questionSets: Array<ReadonlyArray<string>> = [];
+    const deps = createMcpDeps({
+      harness: "omp",
+      ask: (input) => {
+        questionSets.push(Object.keys(input.questions));
+        return Effect.succeed(
+          askResult(chainAnswers({ choice: "better-ui", confidence: 0.88, score: 3.1 }, input)),
+        );
+      },
+      log,
+    });
+
+    const response = await handleMcpRequest(
+      routeCall(11, "polish the settings screen after fixing its crash"),
+      deps,
+    );
+
+    const text = JSON.parse(String(response)).result.content[0].text;
+    expect(text).toContain("load: debugging, then better-ui");
+    expect(questionSets).toHaveLength(2);
+    const events = await Effect.runPromise(log.read());
+    expect(events.filter((event) => event._tag === "route")[0]).toMatchObject({
+      skill: "debugging",
+      skills: ["debugging", "better-ui"],
+    });
+  });
+
+  it("keeps the first route when the follow-up call fails", async () => {
+    const deps = createMcpDeps({ harness: "omp", ask: failingFollowUpAnswers });
+
+    const response = await handleMcpRequest(routeCall(12, "fix the crash, then polish it"), deps);
+
+    const text = JSON.parse(String(response)).result.content[0].text;
+    expect(text).toContain("load: debugging");
+    expect(text).toContain("second: unavailable (JevConfigError)");
   });
 
   it("declines a route below the floors and rejects an empty catalog", async () => {

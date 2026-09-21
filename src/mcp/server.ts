@@ -21,7 +21,12 @@ import { CONTEXT_POLICY } from "../core/directives.ts";
 import type { EventLogService } from "../core/events.ts";
 import { Harness, QuestionMap, type JevEvent, type ReviewDimensionResult } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
-import { skillRoute, skillRouteQuestions } from "../question-packs/skill-routing.ts";
+import {
+  planSkillFollowUp,
+  skillChain,
+  skillRoute,
+  skillRouteQuestions,
+} from "../question-packs/skill-routing.ts";
 import {
   claimVerdicts,
   evidenceQuestions,
@@ -287,7 +292,7 @@ const appendEvent = (
   log === undefined
     ? Promise.resolve()
     : Effect.runPromise(
-        Effect.gen(function* () {
+        Effect.gen(function* appendEventProgram() {
           const now = yield* Clock.currentTimeMillis;
           yield* log.append(build(new Date(now).toISOString()));
         }).pipe(Effect.orElseSucceed(() => undefined)),
@@ -526,6 +531,10 @@ const skillRouteTool = (config: McpConfig): McpTool => ({
       } satisfies AskInput;
       return askForTool(config, askInput, async (result) => {
         const route = skillRoute(input, result.answers);
+        const followUp = await Effect.runPromise(
+          planSkillFollowUp(config.ask, config.harness, input, route),
+        );
+        const chain = skillChain(route, followUp.second);
         await appendEvent(config.log, (ts) => ({
           _tag: "route",
           ts,
@@ -534,6 +543,7 @@ const skillRouteTool = (config: McpConfig): McpTool => ({
           outcome: route._tag === "routed" ? "routed" : "none",
           reason: route._tag === "routed" ? undefined : route.reason,
           skill: route._tag === "routed" ? route.skill : undefined,
+          skills: chain.length > 0 ? chain : undefined,
           candidates: input.candidates.length,
           confidence: route.confidence,
           dependence: route.dependence,
@@ -541,16 +551,28 @@ const skillRouteTool = (config: McpConfig): McpTool => ({
 
         const decision =
           route._tag === "routed"
-            ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
+            ? `load: ${chain.join(", then ")}`
             : `load: nothing (${route.reason})`;
+        const secondLine =
+          followUp.second === undefined
+            ? followUp.error === undefined
+              ? []
+              : [`second: unavailable (${describeJevError(followUp.error)})`]
+            : followUp.second._tag === "none"
+              ? [`second: none (${followUp.second.reason})`]
+              : [];
+        const usage = `${result.usage.input + (followUp.usage?.input ?? 0)} in / ${
+          result.usage.output + (followUp.usage?.output ?? 0)
+        } out`;
         return {
           ok: true,
           text: [
             `jev ${result.model}`,
             decision,
+            ...secondLine,
             `confidence: ${route.confidence}`,
             `dependence: ${route.dependence}`,
-            `usage: ${result.usage.input} in / ${result.usage.output} out`,
+            `usage: ${usage}`,
           ].join("\n"),
         };
       });

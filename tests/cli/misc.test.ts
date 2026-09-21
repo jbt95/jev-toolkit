@@ -50,6 +50,50 @@ describe("jev CLI surface", () => {
     expect(String(logSpy.mock.calls[0]?.[0])).toContain('"harness":"cli"');
   });
 
+  it("filters events by type and session and rejects unknown values", async () => {
+    const path = await tempEventsPath();
+    await appendCall(path, "cli");
+    await Effect.runPromise(
+      makeEventLog(path).append({
+        _tag: "session_label",
+        ts: new Date().toISOString(),
+        harness: "cli",
+        sessionID: "sess-1",
+        outcome: "shipped",
+        friction: 1,
+        waste: "none",
+        taskType: "feature",
+      }),
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const byType = await Effect.runPromise(
+      runCli(
+        ["events", "--type", "session_label", "--session", "sess-1"],
+        cliLayers(path, respond),
+      ),
+    );
+    expect(byType).toBe(0);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain('"_tag":"session_label"');
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const badType = await Effect.runPromise(
+      runCli(["events", "--type", "bogus"], cliLayers(path, respond)),
+    );
+    const badHarness = await Effect.runPromise(
+      runCli(["events", "--harness", "bogus"], cliLayers(path, respond)),
+    );
+    const badSince = await Effect.runPromise(
+      runCli(["events", "--since", "yesterday"], cliLayers(path, respond)),
+    );
+
+    expect([badType, badHarness, badSince]).toEqual([1, 1, 1]);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("unknown --type: bogus");
+    expect(String(errorSpy.mock.calls[1]?.[0])).toContain("unknown harness: bogus");
+    expect(String(errorSpy.mock.calls[2]?.[0])).toContain("invalid --since: yesterday");
+  });
+
   it("passes sessionID through ask and falls back on an invalid JEV_HARNESS", async () => {
     const path = await tempEventsPath();
     const input = JSON.stringify({

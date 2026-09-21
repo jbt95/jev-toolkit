@@ -87,6 +87,8 @@ these as text, never guesses.
 | `core/text.ts` | — | `redact` (credentials), `clip`, `stripFencedCode` (prose-only state) |
 | `core/transcript.ts` | — | Claude transcript parsing: `is_error` tool results, newest first |
 | `core/directives.ts` | — | The prompt directive and context policy strings shared by every harness |
+| `core/impact.ts` | — | Pure cohort aggregation: assisted vs unassisted labeled sessions by harness and task type |
+| `core/doctor.ts` | — | Local health checks: `collectDoctorFacts` probes the log, meter, and session stores; `buildDoctorReport` is pure |
 | `core/paths.ts` | — | Data dir, event log, loop state, harness session roots, API endpoint |
 
 All services follow the repo conventions: class-style `Context.Service`,

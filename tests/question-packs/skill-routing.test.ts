@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   NO_SKILL,
+  skillChain,
+  skillFollowUp,
+  skillFollowUpQuestions,
   skillRoute,
   skillRouteQuestions,
   type SkillRouteInput,
@@ -48,6 +51,68 @@ describe("skillRouteQuestions", () => {
     const skill = questions["skill"];
     if (skill?._tag !== "choice") throw new Error("expected a choice question");
     expect(skill.criteria?.["skill"]).toBe("first line second line");
+  });
+});
+
+describe("skillFollowUp", () => {
+  it("offers only the candidates the first pick did not consume", () => {
+    const questions = skillFollowUpQuestions(input, "debugging");
+    const skill = questions["skill"];
+    if (skill?._tag !== "choice") throw new Error("expected a choice question");
+
+    expect(Object.keys(skill.criteria ?? {})).toEqual([
+      "better-ui",
+      "postgresql-performance",
+      NO_SKILL,
+    ]);
+    expect(skill.instructions).toContain("debugging");
+    expect(questions["second"]).toBeUndefined();
+    expect(questions["dependence"]?._tag).toBe("score");
+  });
+
+  it("routes a follow-up that clears the floors and rejects the rest", () => {
+    const pick = (choice: string, confidence: number, score: number): AnswerMap => ({
+      skill: { _tag: "choice", choice, confidence, probabilities: {} },
+      dependence: { _tag: "score", score, confidence: 0.6 },
+    });
+
+    expect(skillFollowUp(input, "debugging", pick("better-ui", 0.9, 3))).toMatchObject({
+      _tag: "routed",
+      skill: "better-ui",
+      confidence: 0.9,
+      secondNeeded: false,
+    });
+    expect(skillFollowUp(input, "debugging", pick("debugging", 0.9, 3))).toMatchObject({
+      _tag: "none",
+      reason: "unknown-skill",
+    });
+    expect(skillFollowUp(input, "debugging", pick(NO_SKILL, 0.9, 3))).toMatchObject({
+      _tag: "none",
+      reason: "no-match",
+    });
+    expect(skillFollowUp(input, "debugging", pick("better-ui", 0.9, 1))).toMatchObject({
+      _tag: "none",
+      reason: "low-dependence",
+    });
+  });
+
+  it("builds the chain from the first pick and a routed follow-up only", () => {
+    const routedFirst = skillRoute(input, answers({}));
+    const routedSecond = skillFollowUp(input, "debugging", {
+      skill: { _tag: "choice", choice: "better-ui", confidence: 0.9, probabilities: {} },
+      dependence: { _tag: "score", score: 3, confidence: 0.6 },
+    });
+    const declined = skillFollowUp(input, "debugging", {
+      skill: { _tag: "choice", choice: NO_SKILL, confidence: 0.9, probabilities: {} },
+      dependence: { _tag: "score", score: 3, confidence: 0.6 },
+    });
+
+    expect(skillChain(routedFirst, routedSecond)).toEqual(["debugging", "better-ui"]);
+    expect(skillChain(routedFirst, declined)).toEqual(["debugging"]);
+    expect(skillChain(routedFirst, undefined)).toEqual(["debugging"]);
+    expect(
+      skillChain({ _tag: "none", reason: "no-match", confidence: 0, dependence: 0 }, routedSecond),
+    ).toEqual([]);
   });
 });
 

@@ -175,9 +175,13 @@ always offered. Three questions go out per call: the choice, a `noul` asking
 whether a second skill helps, and a `score` for how much the task depends on the
 skill. Code applies the floors (`SKILL_CONFIDENCE_FLOOR` 0.5,
 `SKILL_DEPENDENCE_FLOOR` 2), so a low-confidence or low-dependence pick returns
-`load: nothing` with the reason instead of a skill. Limits: 64 candidates, 4,000
-task characters; the task is redacted and clipped, and only the outcome and the
-skill name are logged.
+`load: nothing` with the reason instead of a skill. When the second-skill gate
+fires, one more question set runs over the remaining candidates with the same
+floors, and the answer becomes `load: a, then b` — at most two skills per call.
+A declined follow-up prints `second: none (reason)`, and a failed follow-up
+keeps the first skill and prints `second: unavailable (...)`. Limits: 64
+candidates, 4,000 task characters; the task is redacted and clipped, and only
+the outcome and skill names are logged.
 
 ## Tool-surface policy
 

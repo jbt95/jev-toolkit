@@ -229,11 +229,11 @@ describe("jev audit", () => {
     expect(afterSecond.filter((event) => event._tag === "attribution")).toHaveLength(2);
   });
 
-  it("reads nothing for an unknown harness filter", async () => {
+  it("rejects an unknown harness filter instead of silently reading nothing", async () => {
     const db = await makeOpencodeDb();
     db.insertMessage("m1", "assistant", Date.now() - 1000, "About 70% done.");
     process.env.JEV_OPENCODE_DB = db.path;
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const code = await Effect.runPromise(
       runCli(
@@ -242,8 +242,8 @@ describe("jev audit", () => {
       ),
     );
 
-    expect(code).toBe(0);
-    expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain("messages=0");
+    expect(code).toBe(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("unknown harness: bogus");
   });
 
   it("summarizes regex tagging versus Jev detection for real prompts", async () => {

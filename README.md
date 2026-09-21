@@ -54,6 +54,11 @@ trigger against real user prompts. Both are model-first: prose-only state
 (fenced code stripped, credentials redacted, clipped), batched calls, code
 applies only documented thresholds. Details in [docs/cli.md](docs/cli.md).
 
+**Impact report** — `jev impact` compares labeled sessions with and without Jev
+usage by harness and task type. It reports outcomes, friction, waste, cost,
+tool errors, stop reasons, and attribution coverage. Comparisons are
+observational, not causal.
+
 **Impact metrics** — every call, opportunity, triage, and label lands in one
 local JSONL event log; `jev meter serve` exposes Prometheus series for any
 scraper, rendered as the `Jev Impact` dashboard on a Grafana instance of your
@@ -97,6 +102,8 @@ jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 | `jev audit run`      | Detect claims agents made; compliance summary; `--dry-run`                             |
 | `jev audit prompts`  | Measure the live prompt trigger against real prompts                                   |
 | `jev label sessions` | Outcome, friction, and waste labels per session                                        |
+| `jev impact`         | Compare assisted and unassisted labeled sessions by harness and task type              |
+| `jev doctor`         | Check Node, API key, event log, meter, and harness session stores                      |
 | `jev route skills`   | Pick the skill for a task: `--task TEXT --skills-dir DIR`                              |
 | `jev eval pack`      | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency          |
 | `jev events`         | Tail the local event log                                                               |

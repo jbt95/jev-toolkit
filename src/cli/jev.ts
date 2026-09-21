@@ -46,6 +46,8 @@ import {
   type LoopGuardService,
 } from "../core/loops.ts";
 import { serveMeter } from "../core/metrics.ts";
+import { buildImpactReport, type ImpactReport, type ImpactStats } from "../core/impact.ts";
+import { buildDoctorReport, collectDoctorFacts, type DoctorReport } from "../core/doctor.ts";
 import { readSkillCatalog } from "../core/skills.ts";
 import {
   apiEndpoint,
@@ -56,12 +58,23 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import { Harness, QuestionMap, type CallEvent, type JevEvent } from "../core/schema.ts";
+import { EventTag, Harness, QuestionMap, type CallEvent, type JevEvent } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
 import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
-import { skillRoute, skillRouteQuestions } from "../question-packs/skill-routing.ts";
+import {
+  compareToBaseline,
+  decodeBaselineReport,
+  type BaselineComparison,
+  type BaselineReport,
+} from "../eval/baseline.ts";
+import {
+  planSkillFollowUp,
+  skillChain,
+  skillRoute,
+  skillRouteQuestions,
+} from "../question-packs/skill-routing.ts";
 import { claimAlignmentQuestions, alignedIndexes } from "../question-packs/claim-alignment.ts";
 import {
   claimDetectionQuestions,
@@ -100,11 +113,13 @@ const USAGE = `usage: jev <command>
 
 commands:
   ask      read {state, questions, model?} JSON on stdin and print TypeSafe answers
-  events   print recent events as JSON lines ([--n N] [--harness <id>])
+  events   print recent events as JSON lines ([--n N] [--harness H] [--since 24h] [--type T] [--session ID])
   audit    scan harness stores for quantitative claims: jev audit run [--since 24h] [--dry-run]
   hook     harness hooks: jev hook prompt [--verify] | jev hook context
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
+  impact   compare Jev-assisted and unassisted sessions: jev impact [--since 7d] [--json]
+  doctor   check local setup and health: jev doctor [--json]
   route    pick the skill for a task: jev route skills --task TEXT --skills-dir DIR
   triage   classify failures or review findings: jev triage failure | review
   eval     replay labeled fixtures through a pack: jev eval pack --fixtures FILE
@@ -129,12 +144,48 @@ const flag = (argv: ReadonlyArray<string>, name: string): Option.Option<string> 
   return Option.fromUndefinedOr(argv[index + 1]);
 };
 
-const parseSinceMs = (value: string): number => {
+/** Parse an `Nh`/`Nd` window; malformed input is a usage error, never a silent default. */
+const parseSinceMs = (value: string): Option.Option<number> => {
   const match = /^(\d+)([hd])$/.exec(value);
-  if (match === null) return 24 * 60 * 60 * 1000;
-  const amount = Number.parseInt(match[1] ?? "24", 10);
-  return match[2] === "h" ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000;
+  if (match === null) return Option.none();
+  const amount = Number.parseInt(match[1] ?? "", 10);
+  if (Number.isNaN(amount)) return Option.none();
+  return Option.some(match[2] === "h" ? amount * 60 * 60 * 1000 : amount * 24 * 60 * 60 * 1000);
 };
+
+/** The `--since` window in milliseconds, or a failure naming the bad value. */
+const sinceWindowMs = (
+  rest: ReadonlyArray<string>,
+  fallback: string,
+): Effect.Effect<number, string> =>
+  Effect.gen(function* sinceWindowMsProgram() {
+    const raw = flag(rest, "--since").pipe(Option.getOrElse(() => fallback));
+    const parsed = parseSinceMs(raw);
+    if (Option.isNone(parsed)) {
+      return yield* Effect.fail(`invalid --since: ${raw} (use Nh or Nd, for example 24h or 7d)`);
+    }
+    return parsed.value;
+  });
+
+/**
+ * The `--harness` filter as a harness tag, or none for `all`. An unknown value
+ * fails: silently dropping the filter would widen a report without saying so.
+ */
+const harnessFilterValue = (
+  rest: ReadonlyArray<string>,
+  fallback: string,
+): Effect.Effect<Option.Option<Harness>, string> =>
+  Effect.gen(function* harnessFilterValueProgram() {
+    const raw = flag(rest, "--harness").pipe(Option.getOrElse(() => fallback));
+    if (raw === "all") return Option.none<Harness>();
+    const decoded = Schema.decodeUnknownOption(Harness)(raw);
+    if (Option.isNone(decoded)) {
+      return yield* Effect.fail(
+        `unknown harness: ${raw} (use all, opencode, claude-code, pi, omp)`,
+      );
+    }
+    return Option.some(decoded.value);
+  });
 
 const printAuditSummary = (
   input: {
@@ -249,7 +300,7 @@ const runHook = (
   rest: ReadonlyArray<string>,
   stdin: () => Effect.Effect<string, string>,
 ): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runHookProgram() {
     if (rest[0] === "context") {
       yield* Effect.sync(() => {
         console.log(CONTEXT_POLICY);
@@ -299,8 +350,147 @@ const runHook = (
     return 0;
   });
 
+const runImpact = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runImpactProgram() {
+    const selectedHarness = yield* harnessFilterValue(rest, "all");
+    const sinceMs = yield* sinceWindowMs(rest, "7d");
+    const now = yield* Clock.currentTimeMillis;
+    const since = new Date(now - sinceMs).toISOString();
+    const log = yield* EventLog;
+    const events = yield* log
+      .read({
+        since,
+        harness: Option.getOrUndefined(selectedHarness),
+      })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    const report = buildImpactReport(events, {
+      since,
+      harness: Option.getOrUndefined(selectedHarness),
+    });
+    yield* Effect.sync(() => {
+      if (rest.includes("--json")) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+      printImpactReport(report);
+    });
+    return 0;
+  });
+
+const formatImpactStats = (stats: ImpactStats): string =>
+  `sessions=${stats.sessions} shipped=${stats.outcomes.shipped} ` +
+  `blocked=${stats.outcomes.blocked} abandoned=${stats.outcomes.abandoned} ` +
+  `ongoing=${stats.outcomes.ongoing} friction_mean=${stats.friction.mean === null ? "n/a" : stats.friction.mean.toFixed(2)} ` +
+  `cost_usd=${stats.cost.totalUsd.toFixed(2)} (${stats.cost.sessions} observed) ` +
+  `tool_errors=${stats.toolErrors.total} (${stats.toolErrors.sessions} observed)`;
+
+const printImpactReport = (report: ImpactReport): void => {
+  console.log(
+    `since: ${report.since ?? "all events"}${report.harness === null ? "" : ` harness=${report.harness}`}`,
+  );
+  console.log(
+    `coverage: identified_labels=${report.coverage.identifiedLabeledSessions} ` +
+      `anonymous_labels=${report.coverage.anonymousLabeledSessions} ` +
+      `assisted_labels=${report.coverage.assistedLabeledSessions} ` +
+      `unassisted_labels=${report.coverage.unassistedLabeledSessions}`,
+  );
+  console.log(
+    `calls: total=${report.coverage.callEvents} ` +
+      `with_session=${report.coverage.callsWithSessionID} ` +
+      `without_session=${report.coverage.callsWithoutSessionID} ` +
+      `attributed_sessions=${report.coverage.attributedSessions} ` +
+      `sessions_with_calls=${report.coverage.sessionsWithCalls}`,
+  );
+  console.log(
+    `missing label facts: cost=${report.coverage.labelsMissingCost} ` +
+      `tool_errors=${report.coverage.labelsMissingToolErrors} ` +
+      `stop_reasons=${report.coverage.labelsMissingStopReasons}`,
+  );
+  if (report.comparisons.length === 0) {
+    console.log("cohorts: none");
+    return;
+  }
+  for (const comparison of report.comparisons) {
+    console.log(`cohort: ${comparison.harness} task=${comparison.taskType}`);
+    console.log(`  assisted:   ${formatImpactStats(comparison.assisted)}`);
+    console.log(`  unassisted: ${formatImpactStats(comparison.unassisted)}`);
+  }
+};
+
+const printDoctorReport = (report: DoctorReport): void => {
+  const width = Math.max(...report.checks.map((check) => check.name.length));
+  for (const check of report.checks) {
+    console.log(`${check.status.padEnd(4)} ${check.name.padEnd(width)} ${check.detail}`);
+  }
+  console.log(
+    `checks: ${report.checks.length} failures=${report.failures} warnings=${report.warnings}`,
+  );
+};
+
+const runDoctor = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runDoctorProgram() {
+    const log = yield* EventLog;
+    const requestedPort = Number.parseInt(
+      Option.firstSomeOf([
+        flag(rest, "--meter-port"),
+        Option.fromUndefinedOr(process.env.JEV_METER_PORT),
+      ]).pipe(Option.getOrElse(() => "8788")),
+      10,
+    );
+    const meterPort = Number.isNaN(requestedPort) ? 8788 : requestedPort;
+    const facts = yield* collectDoctorFacts(log, meterPort).pipe(
+      Effect.mapError((error) => `event log ${error.operation} failed`),
+    );
+    const report = buildDoctorReport(facts);
+    yield* Effect.sync(() => {
+      if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
+      else printDoctorReport(report);
+    });
+    return report.failures === 0 ? 0 : 1;
+  });
+
+/** `jev events`: the log tail with combined filters; every filter value is validated. */
+const runEvents = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runEventsProgram() {
+    const log = yield* EventLog;
+    const selectedHarness = yield* harnessFilterValue(rest, "all");
+    const requested = Number.parseInt(flag(rest, "--n").pipe(Option.getOrElse(() => "10")), 10);
+    const limit = Number.isNaN(requested) ? 10 : requested;
+    const sinceRaw = flag(rest, "--since");
+    const now = yield* Clock.currentTimeMillis;
+    const since = Option.flatMap(sinceRaw, (raw) =>
+      Option.map(parseSinceMs(raw), (ms) => new Date(now - ms).toISOString()),
+    ).pipe(Option.getOrUndefined);
+    if (Option.isSome(sinceRaw) && since === undefined) {
+      return yield* Effect.fail(
+        `invalid --since: ${sinceRaw.value} (use Nh or Nd, for example 24h or 7d)`,
+      );
+    }
+    const typeFlag = flag(rest, "--type");
+    const wantedTag = Option.flatMap(typeFlag, (tag) => Schema.decodeUnknownOption(EventTag)(tag));
+    if (Option.isSome(typeFlag) && Option.isNone(wantedTag)) {
+      return yield* Effect.fail(
+        `unknown --type: ${typeFlag.value} (use call, opportunity, triage, session_label, review, attribution, route)`,
+      );
+    }
+    const session = flag(rest, "--session");
+    const events = yield* log
+      .read({ harness: Option.getOrUndefined(selectedHarness), since })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    const matching = events.filter(
+      (event) =>
+        Option.match(wantedTag, { onNone: () => true, onSome: (tag) => event._tag === tag }) &&
+        Option.match(session, { onNone: () => true, onSome: (id) => event.sessionID === id }),
+    );
+    const tail = matching.slice(-limit);
+    yield* Effect.sync(() => {
+      for (const event of tail) console.log(JSON.stringify(event));
+    });
+    return 0;
+  });
+
 const runMeter = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runMeterProgram() {
     if (rest[0] !== "serve") {
       yield* Effect.sync(() => {
         console.error("usage: jev meter serve [--port N]");
@@ -328,91 +518,86 @@ export function runCli(
 ): Effect.Effect<number> {
   const [command, ...rest] = argv;
 
-  const program: Effect.Effect<number, string, CliServices> = Effect.gen(function* () {
-    switch (command) {
-      case "ask": {
-        const client = yield* JevClient;
-        const raw = yield* stdin();
-        const payload = yield* decodeAskPayload(raw).pipe(
-          Effect.mapError(
-            () => "invalid ask payload on stdin: expected {state, questions, model?, sessionID?}",
-          ),
-        );
-        const harness = harnessFromEnv("cli");
-        const result = yield* client
-          .ask({
-            harness,
-            state: payload.state,
-            questions: payload.questions,
-            model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
-            sessionID: payload.sessionID,
-          })
-          .pipe(Effect.mapError(describeJevError));
-        yield* Effect.sync(() => {
-          console.log(formatAnswers(result, payload.questions));
-        });
-        return 0;
+  const program: Effect.Effect<number, string, CliServices> = Effect.gen(
+    function* dispatchProgram() {
+      switch (command) {
+        case "ask": {
+          const client = yield* JevClient;
+          const raw = yield* stdin();
+          const payload = yield* decodeAskPayload(raw).pipe(
+            Effect.mapError(
+              () => "invalid ask payload on stdin: expected {state, questions, model?, sessionID?}",
+            ),
+          );
+          const harness = harnessFromEnv("cli");
+          const result = yield* client
+            .ask({
+              harness,
+              state: payload.state,
+              questions: payload.questions,
+              model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+              sessionID: payload.sessionID,
+            })
+            .pipe(Effect.mapError(describeJevError));
+          yield* Effect.sync(() => {
+            console.log(formatAnswers(result, payload.questions));
+          });
+          return 0;
+        }
+        case "events": {
+          return yield* runEvents(rest);
+        }
+        case "audit": {
+          return yield* runAudit(rest);
+        }
+        case "label": {
+          return yield* runLabel(rest);
+        }
+        case "impact": {
+          return yield* runImpact(rest);
+        }
+        case "doctor": {
+          return yield* runDoctor(rest);
+        }
+        case "check": {
+          return yield* runCheck(rest);
+        }
+        case "triage": {
+          return yield* runTriage(rest, stdin);
+        }
+        case "eval": {
+          return yield* runEval(rest);
+        }
+        case "hook": {
+          return yield* runHook(rest, stdin);
+        }
+        case "mcp": {
+          const client = yield* JevClient;
+          const log = yield* EventLog;
+          const harness = harnessFromEnv("script");
+          yield* Effect.tryPromise({
+            try: () => serveMcp(createMcpDeps({ harness, ask: client.ask, log })),
+            catch: () => "mcp server failed",
+          });
+          return 0;
+        }
+        case "meter": {
+          return yield* runMeter(rest);
+        }
+        case "route": {
+          return yield* runRoute(rest);
+        }
+        default: {
+          yield* Effect.sync(() => {
+            console.error(USAGE);
+          });
+          return 1;
+        }
       }
-      case "events": {
-        const log = yield* EventLog;
-        const decodedHarness = Option.flatMap(flag(rest, "--harness"), (harnessFlag) =>
-          Schema.decodeUnknownOption(Harness)(harnessFlag),
-        );
-        const requested = Number.parseInt(flag(rest, "--n").pipe(Option.getOrElse(() => "10")), 10);
-        const limit = Number.isNaN(requested) ? 10 : requested;
-        const events = yield* log
-          .read({ harness: Option.getOrUndefined(decodedHarness) })
-          .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
-        const tail = events.slice(-limit);
-        yield* Effect.sync(() => {
-          for (const event of tail) console.log(JSON.stringify(event));
-        });
-        return 0;
-      }
-      case "audit": {
-        return yield* runAudit(rest);
-      }
-      case "label": {
-        return yield* runLabel(rest);
-      }
-      case "check": {
-        return yield* runCheck(rest);
-      }
-      case "triage": {
-        return yield* runTriage(rest, stdin);
-      }
-      case "eval": {
-        return yield* runEval(rest);
-      }
-      case "hook": {
-        return yield* runHook(rest, stdin);
-      }
-      case "mcp": {
-        const client = yield* JevClient;
-        const log = yield* EventLog;
-        const harness = harnessFromEnv("script");
-        yield* Effect.tryPromise({
-          try: () => serveMcp(createMcpDeps({ harness, ask: client.ask, log })),
-          catch: () => "mcp server failed",
-        });
-        return 0;
-      }
-      case "meter": {
-        return yield* runMeter(rest);
-      }
-      case "route": {
-        return yield* runRoute(rest);
-      }
-      default: {
-        yield* Effect.sync(() => {
-          console.error(USAGE);
-        });
-        return 1;
-      }
-    }
-  });
+    },
+  );
 
-  return Effect.gen(function* () {
+  return Effect.gen(function* runCliProgram() {
     const outcome = yield* Effect.result(program);
     if (outcome._tag === "Success") return outcome.success;
     yield* Effect.sync(() => {
@@ -446,10 +631,55 @@ const printPackLab = (report: PackLabReport): void => {
   );
 };
 
-const EVAL_USAGE = "usage: jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--json]";
+const printBaselineComparison = (comparison: BaselineComparison): void => {
+  console.log(
+    `baseline: ${comparison.baselineModel} -> ${comparison.currentModel} ` +
+      `shared=${comparison.sharedCases} new=${comparison.newCases.length} missing=${comparison.missingCases.length}`,
+  );
+  console.log(
+    `regressions: ${comparison.regressions.length === 0 ? "none" : comparison.regressions.join(", ")}`,
+  );
+  if (comparison.drift.length === 0) {
+    console.log("drift: none");
+    return;
+  }
+  for (const entry of comparison.drift) {
+    console.log(`drift: ${entry.id}/${entry.key} ${entry.before} -> ${entry.after}`);
+  }
+};
+
+const EVAL_USAGE =
+  "usage: jev eval pack --fixtures FILE [--repeat N] [--model MODEL] [--baseline FILE] [--fail-on regression|drift] [--json]";
+
+type EvalFailOn = "regression" | "drift";
+
+/** `--fail-on` as a gate policy, or a failure naming the accepted values. */
+const parseEvalFailOn = (
+  rest: ReadonlyArray<string>,
+): Effect.Effect<Option.Option<EvalFailOn>, string> =>
+  Effect.gen(function* parseEvalFailOnProgram() {
+    const raw = flag(rest, "--fail-on");
+    if (Option.isNone(raw)) return Option.none<EvalFailOn>();
+    if (raw.value !== "regression" && raw.value !== "drift") {
+      return yield* Effect.fail(`--fail-on takes regression or drift, not ${raw.value}`);
+    }
+    return Option.some(raw.value);
+  });
+
+/** Decode a saved pack report; an unreadable or malformed file is a usage failure. */
+const loadBaselineReport = (path: string): Effect.Effect<BaselineReport, string> =>
+  Effect.gen(function* loadBaselineReportProgram() {
+    const raw = yield* Effect.tryPromise({
+      try: () => readFile(path, "utf8"),
+      catch: () => `cannot read baseline file: ${path}`,
+    });
+    return yield* decodeBaselineReport(raw).pipe(
+      Effect.mapError(() => `invalid baseline report: ${path}`),
+    );
+  });
 
 const runEval = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runEvalProgram() {
     const fixtures = flag(rest, "--fixtures");
     if (rest[0] !== "pack" || Option.isNone(fixtures)) {
       yield* Effect.sync(() => {
@@ -457,21 +687,52 @@ const runEval = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cli
       });
       return 1;
     }
+    const failOn = yield* parseEvalFailOn(rest);
+    const baselineFlag = flag(rest, "--baseline");
+    if (Option.isSome(failOn) && Option.isNone(baselineFlag)) {
+      return yield* Effect.fail("--fail-on needs --baseline FILE");
+    }
     const requested = Number.parseInt(flag(rest, "--repeat").pipe(Option.getOrElse(() => "1")), 10);
     const repeat = Number.isNaN(requested) ? 1 : requested;
     const model = Option.getOrUndefined(flag(rest, "--model"));
     const client = yield* JevClient;
     const harness = harnessFromEnv("script");
+    // Read the baseline before spending calls: an unreadable or mismatched
+    // baseline is a usage error, not a reason to run the pack.
+    const baseline = yield* Option.match(baselineFlag, {
+      onNone: () => Effect.succeed(Option.none<BaselineReport>()),
+      onSome: (path) => loadBaselineReport(path).pipe(Effect.map(Option.some)),
+    });
     const report = yield* runPackLab(
       { fixturePath: fixtures.value, repeat, model },
       client.ask,
       harness,
     ).pipe(Effect.mapError((error) => `eval failed: ${error.reason}`));
+    if (Option.isSome(baseline) && baseline.value.pack !== report.pack) {
+      return yield* Effect.fail(
+        `baseline pack ${baseline.value.pack} does not match the current pack ${report.pack}`,
+      );
+    }
+    const comparison = Option.map(baseline, (saved) => compareToBaseline(report, saved));
     yield* Effect.sync(() => {
-      if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
-      else printPackLab(report);
+      if (rest.includes("--json")) {
+        console.log(
+          JSON.stringify(
+            Option.isSome(comparison) ? { report, baseline: comparison.value } : report,
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+      printPackLab(report);
+      if (Option.isSome(comparison)) printBaselineComparison(comparison.value);
     });
-    return 0;
+    if (Option.isNone(failOn) || Option.isNone(comparison)) return 0;
+    const crossed =
+      comparison.value.regressions.length > 0 ||
+      (failOn.value === "drift" && comparison.value.drift.length > 0);
+    return crossed ? 1 : 0;
   });
 
 /** Claim detection runs in batches of 20 messages, 2 questions each. */
@@ -484,7 +745,7 @@ const detectClaimsInBatches = (
   messages: ReadonlyArray<RawMessage>,
   subject: "assistant_message" | "user_prompt",
 ): Effect.Effect<ReadonlyArray<readonly [number, DetectedClaim]>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* detectClaimsInBatchesProgram() {
     const found: Array<readonly [number, DetectedClaim]> = [];
     for (let start = 0; start < messages.length; start += DETECTION_BATCH) {
       const batch = messages.slice(start, start + DETECTION_BATCH);
@@ -546,8 +807,8 @@ const runAuditPrompts = (
   harness: Harness,
   rest: ReadonlyArray<string>,
 ): Effect.Effect<number, string> =>
-  Effect.gen(function* () {
-    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "7d")));
+  Effect.gen(function* runAuditPromptsProgram() {
+    const sinceMs = yield* sinceWindowMs(rest, "7d");
     const now = yield* Clock.currentTimeMillis;
     const sinceIso = new Date(now - sinceMs).toISOString();
     const messages = yield* extractOpencode(opencodeDbPath(), sinceIso, "user").pipe(
@@ -604,7 +865,7 @@ const harvestHarnesses = <A>(
   label: string,
   readers: HarnessReaders<A>,
 ): Effect.Effect<ReadonlyArray<A>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* harvestHarnessesProgram() {
     const fail = (error: SourceError): string => `${label}: ${error.source}`;
     const collected: Array<A> = [];
     if (wants("opencode")) {
@@ -631,7 +892,7 @@ const harvestHarnesses = <A>(
  */
 const auditReaders: HarnessReaders<RawMessage> = {
   opencode: (dbPath, sinceIso) =>
-    Effect.gen(function* () {
+    Effect.gen(function* auditOpencodeProgram() {
       const user = yield* extractOpencode(dbPath, sinceIso, "user");
       const assistant = yield* extractOpencode(dbPath, sinceIso, "assistant");
       return [...user, ...assistant];
@@ -713,10 +974,10 @@ const buildSessionQuestions = (
  */
 const inferCallSessions = (
   events: ReadonlyArray<JevEvent>,
-  wants: (harness: string) => boolean,
+  wants: (harness: Harness) => boolean,
   sinceIso: string,
 ): Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* inferCallSessionsProgram() {
     const inferred = new Map<string, ReadonlyArray<string>>();
     const attribute = (harness: Harness, turns: ReadonlyArray<SessionTurn>): void => {
       const calls = events.flatMap((event) =>
@@ -767,7 +1028,7 @@ const correlateAuditClaims = (
   detected: ReadonlyArray<DetectedOpportunity>,
   sessionQuestions: ReadonlyMap<string, ReadonlyArray<string>>,
 ): Effect.Effect<ReadonlyArray<CorrelatedOpportunity>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* correlateAuditClaimsProgram() {
     const bySession = new Map<string, Array<DetectedOpportunity>>();
     for (const item of detected) {
       const key = `${item.harness}|${item.sessionID}`;
@@ -814,7 +1075,7 @@ const appendOpportunityEvents = (
   correlated: ReadonlyArray<CorrelatedOpportunity>,
   now: number,
 ): Effect.Effect<void, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* appendOpportunityEventsProgram() {
     for (const opportunity of correlated) {
       yield* log
         .append({
@@ -843,7 +1104,7 @@ const appendAttributionEvents = (
   inferred: ReadonlyMap<string, ReadonlyArray<string>>,
   now: number,
 ): Effect.Effect<void, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* appendAttributionEventsProgram() {
     const recorded = new Set(
       events.flatMap((event) =>
         event._tag === "attribution" ? [`${event.harness}|${event.sessionID}`] : [],
@@ -867,7 +1128,7 @@ const appendAttributionEvents = (
   });
 
 const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runAuditProgram() {
     const client = yield* JevClient;
     const harness = harnessFromEnv("script");
     if (rest[0] === "prompts") {
@@ -883,11 +1144,12 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     }
     const log = yield* EventLog;
     const dryRun = rest.includes("--dry-run");
-    const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
-    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
+    const selectedHarness = yield* harnessFilterValue(rest, "all");
+    const sinceMs = yield* sinceWindowMs(rest, "24h");
     const now = yield* Clock.currentTimeMillis;
     const sinceIso = new Date(now - sinceMs).toISOString();
-    const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
+    const wants = (harness: Harness): boolean =>
+      Option.match(selectedHarness, { onNone: () => true, onSome: (only) => only === harness });
 
     const messages = yield* harvestHarnesses(wants, sinceIso, "audit failed", auditReaders);
 
@@ -916,7 +1178,7 @@ const runAudit = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
   });
 
 const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runLabelProgram() {
     if (rest[0] !== "sessions") {
       yield* Effect.sync(() => {
         console.error(
@@ -925,14 +1187,15 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       });
       return 1;
     }
-    const sinceMs = parseSinceMs(flag(rest, "--since").pipe(Option.getOrElse(() => "24h")));
-    const harnessFlag = flag(rest, "--harness").pipe(Option.getOrElse(() => "all"));
+    const sinceMs = yield* sinceWindowMs(rest, "24h");
+    const selectedHarness = yield* harnessFilterValue(rest, "all");
     const requested = Number.parseInt(flag(rest, "--limit").pipe(Option.getOrElse(() => "50")), 10);
     const limit = Number.isNaN(requested) ? 50 : requested;
     const dryRun = rest.includes("--dry-run");
     const now = yield* Clock.currentTimeMillis;
     const sinceIso = new Date(now - sinceMs).toISOString();
-    const wants = (harness: string): boolean => harnessFlag === "all" || harnessFlag === harness;
+    const wants = (harness: Harness): boolean =>
+      Option.match(selectedHarness, { onNone: () => true, onSome: (only) => only === harness });
 
     const collected = yield* harvestHarnesses(
       wants,
@@ -1009,7 +1272,7 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
   });
 
 const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runCheckProgram() {
     if (rest[0] !== "commit") {
       yield* Effect.sync(() => {
         console.error(
@@ -1034,7 +1297,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     // One call per message judging the four rules; with a spec, the same
     // call also answers which rules the repo's spec actually requires.
     const judge = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
-      Effect.gen(function* () {
+      Effect.gen(function* judgeProgram() {
         const message = clip(stripFencedCode(redact(rawMessage)), 1500);
         const base = { message };
         const state = Option.match(spec, {
@@ -1056,7 +1319,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       });
     /** Judge one message and record the verdict; each caller prints it. */
     const judgeAndRecord = (rawMessage: string): Effect.Effect<CommitVerdict, string> =>
-      Effect.gen(function* () {
+      Effect.gen(function* judgeAndRecordProgram() {
         const verdict = yield* judge(rawMessage);
         const now = yield* Clock.currentTimeMillis;
         yield* log
@@ -1115,7 +1378,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
 const MAX_ROUTE_TASK_CHARS = 4_000;
 
 const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runRouteProgram() {
     const usage =
       "usage: jev route skills --task TEXT (--skills FILE | --skills-dir DIR) [--dry-run] [--json]";
     if (rest[0] !== "skills") {
@@ -1178,6 +1441,8 @@ const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       })
       .pipe(Effect.mapError(describeJevError));
     const route = skillRoute(input, result.answers);
+    const followUp = yield* planSkillFollowUp(client.ask, harness, input, route);
+    const chain = skillChain(route, followUp.second);
     if (!dryRun) {
       const eventTime = yield* Clock.currentTimeMillis;
       yield* log
@@ -1188,6 +1453,7 @@ const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
           outcome: route._tag === "routed" ? "routed" : "none",
           reason: route._tag === "routed" ? undefined : route.reason,
           skill: route._tag === "routed" ? route.skill : undefined,
+          skills: chain.length > 0 ? chain : undefined,
           candidates: candidates.length,
           confidence: route.confidence,
           dependence: route.dependence,
@@ -1195,11 +1461,16 @@ const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
         .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
     }
     yield* Effect.sync(() => {
+      const second = followUp.second;
       if (asJson) {
         console.log(
           JSON.stringify({
             decision: route._tag,
             skill: route._tag === "routed" ? route.skill : null,
+            skills: chain,
+            second: second !== undefined && second._tag === "routed" ? second.skill : null,
+            secondReason: second !== undefined && second._tag === "none" ? second.reason : null,
+            secondError: followUp.error ?? null,
             reason: route._tag === "routed" ? null : route.reason,
             secondNeeded: route._tag === "routed" ? route.secondNeeded : null,
             confidence: route.confidence,
@@ -1213,18 +1484,26 @@ const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
       console.log(`jev ${result.model}`);
       console.log(
         route._tag === "routed"
-          ? `load: ${route.skill}${route.secondNeeded ? " (a second skill likely helps)" : ""}`
+          ? `load: ${chain.join(", then ")}`
           : `load: nothing (${route.reason})`,
       );
+      if (second !== undefined && second._tag === "none") {
+        console.log(`second: none (${second.reason})`);
+      }
+      if (followUp.error !== undefined) {
+        console.log(`second: unavailable (${describeJevError(followUp.error)})`);
+      }
       console.log(`confidence: ${route.confidence}`);
       console.log(`dependence: ${route.dependence}`);
-      console.log(`usage: ${result.usage.input} in / ${result.usage.output} out`);
+      const totalInput = result.usage.input + (followUp.usage?.input ?? 0);
+      const totalOutput = result.usage.output + (followUp.usage?.output ?? 0);
+      console.log(`usage: ${totalInput} in / ${totalOutput} out`);
     });
     return 0;
   });
 
 const runTriageReview = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runTriageReviewProgram() {
     const inputFlag = flag(rest, "--input");
     if (Option.isNone(inputFlag)) {
       yield* Effect.sync(() => {
@@ -1287,7 +1566,7 @@ const transcriptFailureText = (
   harness: Harness,
   transcriptPath: string,
 ): Effect.Effect<Option.Option<string>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* transcriptFailureTextProgram() {
     const raw = yield* Effect.tryPromise({
       try: () => readFile(transcriptPath, "utf8"),
       catch: () => `cannot read transcript: ${transcriptPath}`,
@@ -1330,7 +1609,7 @@ const selectFailureText = (
   rest: ReadonlyArray<string>,
   stdin: () => Effect.Effect<string, string>,
 ): Effect.Effect<Option.Option<FailureSelection>, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* selectFailureTextProgram() {
     const transcriptFlag = flag(rest, "--transcript");
     if (Option.isSome(transcriptFlag)) {
       const text = yield* transcriptFailureText(ask, harness, transcriptFlag.value);
@@ -1355,7 +1634,7 @@ const canonicalFailureFingerprint = (
   guard: LoopGuardService,
   failureText: string,
 ): Effect.Effect<string, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* canonicalFailureFingerprintProgram() {
     const fp = fingerprint(failureText);
     const safeFailure = clip(stripFencedCode(redact(failureText)));
     const recent = yield* guard
@@ -1392,7 +1671,7 @@ const reportFailure = (
   loop: LoopCheck,
   result: AskResult,
 ): Effect.Effect<void, string> =>
-  Effect.gen(function* () {
+  Effect.gen(function* reportFailureProgram() {
     const classAnswer = choiceOf(result.answers, "class");
     const blocksAnswer = noulOf(result.answers, "blocks_work");
     const suppressAnswer = noulOf(result.answers, "safe_to_suppress");
@@ -1437,7 +1716,7 @@ const runTriageFailure = (
   rest: ReadonlyArray<string>,
   stdin: () => Effect.Effect<string, string>,
 ): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runTriageFailureProgram() {
     const client = yield* JevClient;
     const guard = yield* LoopGuard;
     const log = yield* EventLog;
@@ -1477,7 +1756,7 @@ const runTriage = (
   rest: ReadonlyArray<string>,
   stdin: () => Effect.Effect<string, string>,
 ): Effect.Effect<number, string, CliServices> =>
-  Effect.gen(function* () {
+  Effect.gen(function* runTriageProgram() {
     if (rest[0] === "review") return yield* runTriageReview(rest);
     if (rest[0] !== "failure") {
       yield* Effect.sync(() => {
