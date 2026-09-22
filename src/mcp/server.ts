@@ -17,7 +17,7 @@ import {
   type AskResult,
   type JevError,
 } from "../core/client.ts";
-import { CONTEXT_POLICY } from "../core/directives.ts";
+import { MCP_INSTRUCTIONS } from "../core/directives.ts";
 import type { EventLogService } from "../core/events.ts";
 import { Harness, QuestionMap, type JevEvent, type ReviewDimensionResult } from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
@@ -155,14 +155,15 @@ const ASK_INPUT_SCHEMA: JsonValue = {
   properties: {
     state: {
       type: ["string", "object", "array"],
-      description: "Content to evaluate: text, or structured JSON with named fields.",
+      description:
+        "Required. Content to evaluate: text, or structured JSON with named fields. Do not replace this with query.",
     },
     questions: {
       type: "object",
       description:
-        "Map of question id to question. Each: { _tag: 'choice', instructions, criteria: {option: description} } | " +
+        "Required map of question id to question. Each: { _tag: 'choice', instructions, criteria: {option: description} } | " +
         "{ _tag: 'noul', instructions, criteria?: {true, false} } | " +
-        "{ _tag: 'score', instructions, criteria: [level, level, ...] }.",
+        "{ _tag: 'score', instructions, criteria: [level, level, ...] }. Never omit this field.",
       additionalProperties: true,
     },
     model: { type: "string", description: "TypeSafe model, default jev-latest." },
@@ -175,6 +176,18 @@ const ASK_INPUT_SCHEMA: JsonValue = {
   },
   required: ["state", "questions"],
   additionalProperties: false,
+  examples: [
+    {
+      state: "The export must choose one backend.",
+      questions: {
+        decision: {
+          _tag: "choice",
+          instructions: "Which backend should we choose?",
+          criteria: { csv: "Simple tabular output", xlsx: "Workbook formatting required" },
+        },
+      },
+    },
+  ],
 };
 
 const VERIFY_INPUT_SCHEMA: JsonValue = {
@@ -245,7 +258,7 @@ const SKILL_ROUTE_INPUT_SCHEMA: JsonValue = {
     skills: {
       type: "array",
       description:
-        "Candidate skills; each name is an option and each description is its criterion.",
+        "Required candidate skills; each name is an option and each description is its criterion. Include every skill that could apply.",
       items: {
         type: "object",
         properties: {
@@ -260,10 +273,21 @@ const SKILL_ROUTE_INPUT_SCHEMA: JsonValue = {
   },
   required: ["task", "skills"],
   additionalProperties: false,
+  examples: [
+    {
+      task: "The export button spins forever; find out why and fix it.",
+      skills: [
+        { name: "debugging", description: "Root-cause work for failures" },
+        { name: "better-ui", description: "UI polish and interaction details" },
+      ],
+    },
+  ],
 };
 
 const ASK_DESCRIPTION =
   "Ask TypeSafe/Jev typed questions over a state and get calibrated, structured answers. " +
+  "Required input has both state and questions; query is not a valid replacement. Minimal shape: " +
+  "{state: 'focused context', questions: {decision: {_tag: 'choice', instructions: 'Pick one', criteria: {a: '...', b: '...'}}}}. " +
   "Primitives: choice (pick one of a defined set), noul (probability of yes), score " +
   "(probability-weighted rating across ordered levels). Call before writing any probability, " +
   "ranking, comparison, choice among alternatives, or graded estimate (severity, risk, quality, " +
@@ -311,6 +335,16 @@ const appendEvent = (
         }).pipe(Effect.orElseSucceed(() => undefined)),
       );
 
+const argumentRepairHint = (toolName: string): string => {
+  if (toolName === "typesafe_ask") {
+    return " Provide both required fields state and questions; query is not a valid replacement.";
+  }
+  if (toolName === "typesafe_skill_route") {
+    return " Provide both required fields task and skills.";
+  }
+  return "";
+};
+
 /** Decodes tool arguments, or reports the decode failure as tool text. */
 const withDecodedArgs = async <A>(
   toolName: string,
@@ -319,7 +353,10 @@ const withDecodedArgs = async <A>(
 ): Promise<McpToolOutcome> => {
   const outcome = await Effect.runPromise(Effect.result(decoded));
   if (outcome._tag === "Failure") {
-    return { ok: false, text: `invalid ${toolName} arguments: ${outcome.failure.message}` };
+    return {
+      ok: false,
+      text: `invalid ${toolName} arguments: ${outcome.failure.message}.${argumentRepairHint(toolName)}`,
+    };
   }
   return await body(outcome.success);
 };
@@ -612,7 +649,7 @@ const initializeResult = (params: Option.Option<JsonValue>, toolNames: string): 
     protocolVersion,
     capabilities: { tools: {} },
     serverInfo: { name: "jev", version: SERVER_VERSION },
-    instructions: `${CONTEXT_POLICY} Tools: ${toolNames}.`,
+    instructions: `${MCP_INSTRUCTIONS} Tools: ${toolNames}.`,
   };
 };
 

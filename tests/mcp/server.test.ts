@@ -130,6 +130,9 @@ describe("MCP server", () => {
     expect(parsed.result.capabilities.tools).toEqual({});
     expect(parsed.result.serverInfo.name).toBe("jev");
     expect(parsed.result.instructions).toContain("typesafe_verify");
+    expect(parsed.result.instructions).toContain("state");
+    expect(parsed.result.instructions).toContain("questions");
+    expect(parsed.result.instructions).toContain("query-only");
   });
 
   it("lists the ask, verify, review, and skill-route tools with their schemas", async () => {
@@ -148,6 +151,8 @@ describe("MCP server", () => {
       "typesafe_skill_route",
     ]);
     expect(parsed.result.tools[0].inputSchema.required).toEqual(["state", "questions"]);
+    expect(parsed.result.tools[0].description).toContain("query is not a valid replacement");
+    expect(parsed.result.tools[0].inputSchema.examples).toHaveLength(1);
     expect(parsed.result.tools[1].inputSchema.required).toEqual(["claims", "evidence"]);
     expect(parsed.result.tools[2].inputSchema.required).toEqual([]);
     expect(parsed.result.tools[3].inputSchema.required).toEqual(["task", "skills"]);
@@ -334,6 +339,9 @@ describe("MCP server", () => {
     const parsed = JSON.parse(String(response));
     expect(parsed.result.isError).toBe(true);
     expect(parsed.result.content[0].text).toContain("invalid typesafe_ask arguments");
+    expect(parsed.result.content[0].text).toContain(
+      "Provide both required fields state and questions",
+    );
   });
 
   it("declines a route below the floors and rejects an empty catalog", async () => {
