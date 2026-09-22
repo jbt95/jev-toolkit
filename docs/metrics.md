@@ -200,11 +200,16 @@ After meter-code edits, restart it so the new code is loaded.
 ## Smoke test
 
 `scripts/check-metrics.sh` queries Prometheus for every `jev_*` metric family
-and fails if a series is missing:
+and fails if a series is missing. It also records one checkpoint, correction,
+and cohort event in a temporary log and asserts their exact meter samples, so
+the outcome path is tested without polluting the real event log:
 
 ```console
 scripts/check-metrics.sh         # PROM_URL to override http://localhost:9090
+scripts/check-metrics.sh --live  # also append smoke samples to the live log
 ```
 
 Run it after installs, after meter restarts, and after audit changes that
-should produce new series.
+should produce new series. `--live` is opt-in because it intentionally adds
+clearly named synthetic checkpoint, correction, and cohort events to the
+configured event log so the Grafana outcome panels have visible samples.
