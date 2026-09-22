@@ -8,6 +8,7 @@ operator- or automation-supplied objective outcome without calling TypeSafe.
 ```console
 jev ask                                  # {state, questions, model?} JSON on stdin
 jev events [--harness H] [--n 10]        # tail the local event log
+jev install opencode [--force]           # install OpenCode plugin + routing policy
 jev triage failure --text FILE           # classify a failure; loop breaker built in
 jev triage failure --transcript FILE     # pick the failing tool result, then classify
 jev triage review --input findings.json  # route findings: blockers/cosmetic/questions
@@ -286,6 +287,19 @@ command works as an install-and-health gate. `--json` emits
 
 Run it after installs, after harness wiring changes, and when a dashboard looks
 wrong.
+
+## install — configure a harness integration
+
+```console
+jev install opencode [--force]
+```
+
+Installs the managed OpenCode plugin and `jev-routing.md` under the global
+OpenCode config directory (`$XDG_CONFIG_HOME/opencode`, or
+`~/.config/opencode`). It also preserves existing config entries while
+idempotently adding the plugin and instruction paths. Restart OpenCode after
+installing. Existing managed files with different content are not overwritten
+unless `--force` is supplied.
 
 ## eval pack — replay labeled fixtures
 

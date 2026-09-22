@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -80,6 +81,7 @@ import {
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
+import { defaultOpenCodeConfigDir, installOpenCode } from "./opencode-install.ts";
 import { runPackLab, type PackLabReport } from "../eval/pack-lab.ts";
 import {
   compareToBaseline,
@@ -141,6 +143,7 @@ commands:
   cohort    assign a session to a comparison cohort: jev cohort --name assisted|holdout --session ID [--source SOURCE]
   impact   compare Jev-assisted and unassisted sessions: jev impact [--since 7d] [--json]
   doctor   check local setup and health: jev doctor [--json]
+  install  configure an integration: jev install opencode [--force]
   route    pick the skill for a task: jev route skills --task TEXT --skills-dir DIR
   triage   classify failures or review findings: jev triage failure | review
   eval     replay labeled fixtures through a pack: jev eval pack --fixtures FILE
@@ -700,101 +703,123 @@ const runMeter = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     );
   });
 
+const runInstall = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runInstallProgram() {
+    const force = rest.includes("--force");
+    const targets = rest.filter((argument) => argument !== "--force");
+    if (targets.length !== 1 || targets[0] !== "opencode") {
+      yield* Effect.sync(() => {
+        console.error("usage: jev install opencode [--force]");
+      });
+      return 1;
+    }
+    const sourceRoot = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../integrations/opencode",
+    );
+    const result = yield* installOpenCode(sourceRoot, undefined, force).pipe(
+      Effect.mapError((error) =>
+        error.operation === "conflict"
+          ? `opencode install refused to overwrite ${error.path}; rerun with --force`
+          : `opencode install ${error.operation} failed: ${error.path}`,
+      ),
+    );
+    yield* Effect.sync(() => {
+      console.log(`plugin: ${result.pluginPath}`);
+      console.log(`instruction: ${result.instructionPath}`);
+      console.log(`config: ${result.configPath}`);
+      console.log(`config directory: ${defaultOpenCodeConfigDir()}`);
+      console.log("restart OpenCode to load the integration");
+    });
+    return 0;
+  });
+
+const runAsk = (
+  stdin: () => Effect.Effect<string, string>,
+): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runAskProgram() {
+    const client = yield* JevClient;
+    const raw = yield* stdin();
+    const payload = yield* decodeAskPayload(raw).pipe(
+      Effect.mapError(
+        () => "invalid ask payload on stdin: expected {state, questions, model?, sessionID?}",
+      ),
+    );
+    const harness = harnessFromEnv("cli");
+    const result = yield* client
+      .ask({
+        harness,
+        state: payload.state,
+        questions: payload.questions,
+        model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
+        sessionID: payload.sessionID,
+        purpose: "ask",
+      })
+      .pipe(Effect.mapError(describeJevError));
+    yield* Effect.sync(() => {
+      console.log(formatAnswers(result, payload.questions));
+    });
+    return 0;
+  });
+
+const runMcp = (): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runMcpProgram() {
+    const client = yield* JevClient;
+    const log = yield* EventLog;
+    const harness = harnessFromEnv("script");
+    yield* Effect.tryPromise({
+      try: () => serveMcp(createMcpDeps({ harness, ask: client.ask, log })),
+      catch: () => "mcp server failed",
+    });
+    return 0;
+  });
+
+type CommandHandler = (rest: ReadonlyArray<string>) => Effect.Effect<number, string, CliServices>;
+
+const commandHandlers = (
+  stdin: () => Effect.Effect<string, string>,
+): ReadonlyMap<string, CommandHandler> =>
+  new Map<string, CommandHandler>([
+    ["ask", () => runAsk(stdin)],
+    ["events", runEvents],
+    ["audit", runAudit],
+    ["label", runLabel],
+    ["impact", runImpact],
+    ["checkpoint", runCheckpoint],
+    ["correction", runCorrection],
+    ["cohort", runCohort],
+    ["doctor", runDoctor],
+    ["install", runInstall],
+    ["check", runCheck],
+    ["triage", (rest) => runTriage(rest, stdin)],
+    ["eval", runEval],
+    ["hook", (rest) => runHook(rest, stdin)],
+    ["mcp", () => runMcp()],
+    ["meter", runMeter],
+    ["route", runRoute],
+  ]);
+
+const unknownCommand = (): Effect.Effect<number, string, CliServices> =>
+  Effect.sync(() => {
+    console.error(USAGE);
+    return 1;
+  });
+
+const selectCommand = (
+  handler: CommandHandler | undefined,
+  rest: ReadonlyArray<string>,
+): Effect.Effect<number, string, CliServices> => {
+  if (handler === undefined) return unknownCommand();
+  return handler(rest);
+};
+
 export function runCli(
   argv: ReadonlyArray<string>,
   layers: Layer.Layer<CliServices>,
   stdin: () => Effect.Effect<string, string> = readStdin,
 ): Effect.Effect<number> {
   const [command, ...rest] = argv;
-
-  const program: Effect.Effect<number, string, CliServices> = Effect.gen(
-    function* dispatchProgram() {
-      switch (command) {
-        case "ask": {
-          const client = yield* JevClient;
-          const raw = yield* stdin();
-          const payload = yield* decodeAskPayload(raw).pipe(
-            Effect.mapError(
-              () => "invalid ask payload on stdin: expected {state, questions, model?, sessionID?}",
-            ),
-          );
-          const harness = harnessFromEnv("cli");
-          const result = yield* client
-            .ask({
-              harness,
-              state: payload.state,
-              questions: payload.questions,
-              model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
-              sessionID: payload.sessionID,
-              purpose: "ask",
-            })
-            .pipe(Effect.mapError(describeJevError));
-          yield* Effect.sync(() => {
-            console.log(formatAnswers(result, payload.questions));
-          });
-          return 0;
-        }
-        case "events": {
-          return yield* runEvents(rest);
-        }
-        case "audit": {
-          return yield* runAudit(rest);
-        }
-        case "label": {
-          return yield* runLabel(rest);
-        }
-        case "impact": {
-          return yield* runImpact(rest);
-        }
-        case "checkpoint": {
-          return yield* runCheckpoint(rest);
-        }
-        case "correction": {
-          return yield* runCorrection(rest);
-        }
-        case "cohort": {
-          return yield* runCohort(rest);
-        }
-        case "doctor": {
-          return yield* runDoctor(rest);
-        }
-        case "check": {
-          return yield* runCheck(rest);
-        }
-        case "triage": {
-          return yield* runTriage(rest, stdin);
-        }
-        case "eval": {
-          return yield* runEval(rest);
-        }
-        case "hook": {
-          return yield* runHook(rest, stdin);
-        }
-        case "mcp": {
-          const client = yield* JevClient;
-          const log = yield* EventLog;
-          const harness = harnessFromEnv("script");
-          yield* Effect.tryPromise({
-            try: () => serveMcp(createMcpDeps({ harness, ask: client.ask, log })),
-            catch: () => "mcp server failed",
-          });
-          return 0;
-        }
-        case "meter": {
-          return yield* runMeter(rest);
-        }
-        case "route": {
-          return yield* runRoute(rest);
-        }
-        default: {
-          yield* Effect.sync(() => {
-            console.error(USAGE);
-          });
-          return 1;
-        }
-      }
-    },
-  );
+  const program = selectCommand(commandHandlers(stdin).get(command ?? ""), rest);
 
   return Effect.gen(function* runCliProgram() {
     const outcome = yield* Effect.result(program);

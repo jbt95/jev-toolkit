@@ -79,11 +79,13 @@ export TYPESAFE_API_KEY=… # must be visible to harness processes
 ```
 
 Wire your harness: [docs/mcp.md](docs/mcp.md) — any stdio MCP client, `command:
-jev`, `args: ["mcp"]`. Per-harness plugins (opencode, Claude Code, pi, omp) are
+jev`, `args: ["mcp"]`. Install the OpenCode integration with
+`jev install opencode`; other per-harness plugins (Claude Code, pi, omp) are
 under [integrations/](integrations/) with their own install steps.
 
 ```console
 jev ask </path/to/payload.json        # raw judgment over stdin
+jev install opencode                  # install OpenCode plugin + routing policy
 jev triage failure --transcript FILE  # failure classification + loop breaker
 jev audit run --since 24h --dry-run   # what claims did agents make?
 jev route skills --task TEXT --skills-dir DIR   # pick the skill for a task
@@ -95,26 +97,27 @@ jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 
 ### CLI at a glance
 
-| Command              | Purpose                                                                                |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| `jev ask`            | Raw judgment: `{state, questions, model?}` on stdin                                    |
-| `jev triage failure` | Classify a failure; transcript mode selects the failing snippet; loop breaker built in |
-| `jev triage review`  | Route findings: blockers / cosmetic / questions                                        |
-| `jev check commit`   | Commit conformance; `--spec` adopts the repo's documented rules; `--replay N`          |
-| `jev audit run`      | Detect claims agents made; compliance summary; `--dry-run`                             |
-| `jev audit prompts`  | Measure the live prompt trigger against real prompts                                   |
-| `jev label sessions` | Outcome, friction, and waste labels per session                                        |
-| `jev checkpoint`     | Record a privacy-safe test, build, review, commit, or rework outcome                   |
-| `jev correction`     | Record a privacy-safe accepted, rejected, override, clarification, or handoff event    |
-| `jev cohort`         | Assign a session to an explicit `assisted` or `holdout` cohort                         |
-| `jev impact`         | Joined funnel, calibration, timeline, overhead, and assisted/unassisted comparisons    |
-| `jev doctor`         | Check Node, API key, event log, meter, and harness session stores                      |
-| `jev route skills`   | Pick the skill for a task: `--task TEXT --skills-dir DIR`                              |
-| `jev eval pack`      | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency          |
-| `jev events`         | Tail the local event log                                                               |
-| `jev hook prompt`    | Harness hook adapter (prints the directive or nothing)                                 |
-| `jev mcp`            | MCP server: `typesafe_ask` plus task-shaped judgment tools                             |
-| `jev meter serve`    | Prometheus metrics from the event log                                                  |
+| Command                | Purpose                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `jev ask`              | Raw judgment: `{state, questions, model?}` on stdin                                               |
+| `jev triage failure`   | Classify a failure; transcript mode selects the failing snippet; loop breaker built in            |
+| `jev triage review`    | Route findings: blockers / cosmetic / questions                                                   |
+| `jev check commit`     | Commit conformance; `--spec` adopts the repo's documented rules; `--replay N`                     |
+| `jev audit run`        | Detect claims agents made; compliance summary; `--dry-run`                                        |
+| `jev audit prompts`    | Measure the live prompt trigger against real prompts                                              |
+| `jev label sessions`   | Outcome, friction, and waste labels per session                                                   |
+| `jev checkpoint`       | Record a privacy-safe test, build, review, commit, or rework outcome                              |
+| `jev correction`       | Record a privacy-safe accepted, rejected, override, clarification, or handoff event               |
+| `jev cohort`           | Assign a session to an explicit `assisted` or `holdout` cohort                                    |
+| `jev impact`           | Joined funnel, calibration, timeline, overhead, and assisted/unassisted comparisons               |
+| `jev doctor`           | Check Node, API key, event log, meter, and harness session stores                                 |
+| `jev install opencode` | Install the OpenCode plugin and skill-routing instruction; use `--force` to replace custom copies |
+| `jev route skills`     | Pick the skill for a task: `--task TEXT --skills-dir DIR`                                         |
+| `jev eval pack`        | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency                     |
+| `jev events`           | Tail the local event log                                                                          |
+| `jev hook prompt`      | Harness hook adapter (prints the directive or nothing)                                            |
+| `jev mcp`              | MCP server: `typesafe_ask` plus task-shaped judgment tools                                        |
+| `jev meter serve`      | Prometheus metrics from the event log                                                             |
 
 ## Docs
 
@@ -131,7 +134,7 @@ jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 ```
 src/core/           services + schema (client, events, metrics, loops, text, transcript, paths)
 src/mcp/server.ts   stdio MCP server (jev mcp) — the judgment tool surface
-src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | mcp | meter
+src/cli/jev.ts      CLI: ask | events | audit | label | check | triage | hook | install | mcp | meter
 src/question-packs/ detection, alignment, reviewer, failure, commit, session labels, skill routing
 src/eval/          pack lab: fixture replay, answer drift, and agreement reports
 src/audit/          message extractors (opencode DB, claude projects, pi/omp logs)

@@ -1,7 +1,7 @@
 # Jev for OpenCode V2
 
-Native prompt recall plus static routing. Zero dependencies: `index.ts` has no
-imports beyond `node:` builtins, so no install step is needed.
+Native prompt recall plus typed skill-routing guidance. Zero runtime
+dependencies: `index.ts` is loaded directly by OpenCode.
 
 ## What it does
 
@@ -27,12 +27,17 @@ The recall patterns mirror `src/core/detector.ts` (and
 ## Install
 
 ```console
-mkdir -p ~/.config/opencode/plugins/jev ~/.config/opencode/instructions
-cp integrations/opencode/index.ts ~/.config/opencode/plugins/jev/index.ts
-cp integrations/opencode/jev-routing.md ~/.config/opencode/instructions/jev-routing.md
+jev install opencode
 ```
 
-Add the plugin entry (file-level, not directory-level) and keep the
+The command copies the managed plugin and instruction files and idempotently
+adds their entries to the global OpenCode config. It honors
+`XDG_CONFIG_HOME`; restart OpenCode after installing. If either managed file
+already exists with different content, the command stops instead of overwriting
+it; use `jev install opencode --force` when replacement is intentional.
+
+The installer adds these entries. If you configure the integration manually,
+use a file-level plugin entry (not a directory-level entry) and keep the
 instructions entry in `~/.config/opencode/opencode.json`:
 
 ```jsonc
@@ -50,9 +55,10 @@ opencode service restart
 opencode run "what should be the best approach to implement this ticket"
 ```
 
-The first tool call in the session should be a Jev `typesafe_ask` (via the
-`jev` MCP server). `jev hook prompt` remains available for harnesses with a
-prompt hook; it uses the same detector.
+The first judgment tool call in a session should be a Jev tool via the `jev`
+MCP server. Use `typesafe_skill_route` when choosing among skills and
+`typesafe_ask` for other judgments. `jev hook prompt` remains available for
+harnesses with a prompt hook; it uses the same detector.
 
 ## Uninstall
 
