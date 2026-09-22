@@ -25,7 +25,9 @@ const RECALL_PATTERNS: ReadonlyArray<RegExp> = [
 ];
 
 const RECALL_DIRECTIVE =
-  "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing that judgment.";
+  "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing " +
+  "that judgment. If choosing which skill(s) to load from a candidate catalog, call " +
+  "typesafe_skill_route with the candidates instead, then load only the returned skills.";
 
 interface BeforeAgentStartEvent {
   prompt: string;

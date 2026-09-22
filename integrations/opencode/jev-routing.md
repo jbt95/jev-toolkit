@@ -20,6 +20,12 @@ alternatives and must each go through `typesafe_ask` before you recommend one:
 - streaming vs in-memory workbook, Java-sort vs SQL-sort, sync vs async;
 - any "best approach / which option / how should we design" answer.
 
+For skill selection specifically, call `typesafe_skill_route` rather than the
+generic `typesafe_ask`. Pass the candidate skill names and descriptions that
+are available in the current context. Load only the skill or ordered skill
+chain returned by the tool; a generic recommendation about skills is not a
+route event.
+
 Rules:
 
 - Call `typesafe_ask` before writing the judgment.

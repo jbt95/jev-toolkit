@@ -6,7 +6,8 @@ Native OMP package with two parts:
   appends the Jev directive to the system prompt when the prompt asks for a
   quantitative judgment. Non-blocking and silent otherwise.
 - **Skill** — `SKILL.md` teaches the agent when and how to call the mounted
-  `typesafe_ask` tool, with `jev ask` as the fallback.
+  `typesafe_ask` and `typesafe_skill_route` tools, with the Jev CLI as the
+  fallback.
 
 OMP reads the `pi` manifest in the repository's root `package.json`, so the
 registration is the same file Pi loads: OMP vendors the Pi extension API.

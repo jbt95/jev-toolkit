@@ -2,13 +2,15 @@
 
 Plugin with three parts:
 
-- **MCP tool** — the plugin declares the `jev` MCP server (`jev mcp`): one
-  `typesafe_ask` tool for probabilities, rankings, choices, and graded
-  estimates. No per-harness tool code; the tool arrives with the session.
+- **MCP tools** — the plugin declares the `jev` MCP server (`jev mcp`),
+  including `typesafe_ask` for general judgments and `typesafe_skill_route`
+  for choosing skills from a candidate catalog. No per-harness tool code; the
+  tools arrive with the session.
 - **Prompt trigger** — a `UserPromptSubmit` hook that injects the Jev
   directive when a quantitative question is detected.
-- **Skill** — `skills/jev/SKILL.md` teaches the agent when and how to call the
-  tool, with the `jev ask` CLI as fallback.
+- **Skill** — `skills/jev/SKILL.md` teaches the agent when and how to call
+  `typesafe_ask` or `typesafe_skill_route`, with the `jev ask` CLI as fallback
+  for general judgments.
 
 ## Requires
 
@@ -42,7 +44,8 @@ server: with the plugin installed, `~/.claude.json` must not declare a second
   directive only when a quantitative-intent pattern matches; never blocks.
   `Stop` → `jev triage failure`: prints the failure classification only when it
   blocks work or the loop breaker escalates.
-- `skills/jev/SKILL.md` — when and how to call `typesafe_ask`.
+- `skills/jev/SKILL.md` — when and how to call `typesafe_ask` and
+  `typesafe_skill_route`.
 
 ## Uninstall
 

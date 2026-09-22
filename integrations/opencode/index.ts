@@ -58,13 +58,16 @@ const RECALL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: Re
 ];
 
 const RECALL_DIRECTIVE =
-  "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing that judgment.";
+  "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing " +
+  "that judgment. If choosing which skill(s) to load from a candidate catalog, call " +
+  "typesafe_skill_route with the candidates instead, then load only the returned skills.";
 
 export const PROMPT_ECHO =
   "[Jev policy] Exploring the code first does not replace this step: a code-derived " +
   "recommendation is still a choice among alternatives. Before recommending an approach, " +
   "call the typesafe_ask tool with the alternatives, then report its answer with " +
-  "confidence as from Jev.";
+  "confidence as from Jev. When the choice is which skills to load, use " +
+  "typesafe_skill_route with the candidate names and descriptions instead.";
 
 const DIRECTIVE_TAG = "[Jev policy]";
 

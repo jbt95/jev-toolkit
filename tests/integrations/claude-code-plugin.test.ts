@@ -92,4 +92,11 @@ describe("claude-code plugin hooks", () => {
     expect(commands).toContain("${CLAUDE_PLUGIN_ROOT}/hooks/jev-prompt.sh");
     expect(commands).toContain("${CLAUDE_PLUGIN_ROOT}/hooks/jev-failure.sh");
   });
+
+  it("teaches skill selection through the typed route tool", async () => {
+    const skill = await readFile(join(pluginDir, "skills", "jev", "SKILL.md"), "utf8");
+
+    expect(skill).toContain("typesafe_skill_route");
+    expect(skill).toMatch(/every\s+candidate skill/);
+  });
 });
