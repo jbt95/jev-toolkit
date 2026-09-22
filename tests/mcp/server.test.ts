@@ -178,9 +178,13 @@ describe("MCP server", () => {
   it("routes a task to a skill and logs the decision", async () => {
     const path = await tempEventsPath();
     const log = makeEventLog(path);
+    const purposes: Array<AskInput["purpose"]> = [];
     const deps = createMcpDeps({
       harness: "omp",
-      ask: (input) => Effect.succeed(askResult(routeAnswers(input))),
+      ask: (input) => {
+        purposes.push(input.purpose);
+        return Effect.succeed(askResult(routeAnswers(input)));
+      },
       log,
     });
 
@@ -190,6 +194,7 @@ describe("MCP server", () => {
     expect(parsed.result.isError).toBeUndefined();
     expect(parsed.result.content[0].text).toContain("load: debugging");
     expect(parsed.result.content[0].text).toContain("confidence: 0.97");
+    expect(purposes[0]).toBe("route");
 
     const events = await Effect.runPromise(log.read());
     expect(events.filter((event) => event._tag === "route")[0]).toMatchObject({
@@ -483,15 +488,18 @@ describe("MCP server", () => {
     });
 
     expect(seen[0]?.sessionID).toBe("ses_attributed");
+    expect(seen[0]?.purpose).toBe("ask");
   });
 
   it("verifies claims, reports deterministic gaps, and logs a verify summary", async () => {
     const path = await tempEventsPath();
     const log = makeEventLog(path);
+    const purposes: Array<AskInput["purpose"]> = [];
     const deps = createMcpDeps({
       harness: "script",
-      ask: () =>
-        Effect.succeed(
+      ask: (input) => {
+        purposes.push(input.purpose);
+        return Effect.succeed(
           askResult({
             c0_verdict: { _tag: "choice", choice: "supported", confidence: 0.9, probabilities: {} },
             c1_verdict: {
@@ -501,7 +509,8 @@ describe("MCP server", () => {
               probabilities: {},
             },
           }),
-        ),
+        );
+      },
       log,
     });
 
@@ -517,6 +526,7 @@ describe("MCP server", () => {
     expect(outcome?.text).toContain("c0: supported");
     expect(outcome?.text).toContain("c1: contradicted");
     expect(outcome?.text).toContain("numbers not in evidence: 90%");
+    expect(purposes[0]).toBe("verify");
     const events = await Effect.runPromise(log.read());
     const triage = events.find((event) => event._tag === "triage");
     expect(triage?._tag === "triage" && triage.feature).toBe("verify");
@@ -537,9 +547,13 @@ describe("MCP server", () => {
   it("reviews a change, returns dimension JSON, and logs a review event", async () => {
     const path = await tempEventsPath();
     const log = makeEventLog(path);
+    const purposes: Array<AskInput["purpose"]> = [];
     const deps = createMcpDeps({
       harness: "script",
-      ask: (input) => Effect.succeed(askResult(reviewAnswers(input))),
+      ask: (input) => {
+        purposes.push(input.purpose);
+        return Effect.succeed(askResult(reviewAnswers(input)));
+      },
       log,
     });
 
@@ -555,6 +569,7 @@ describe("MCP server", () => {
     });
     expect(parsed.topWeakness).toBe("security");
     expect(parsed.usage).toEqual({ input: 10, output: 2 });
+    expect(purposes[0]).toBe("review");
 
     const events = await Effect.runPromise(log.read());
     const review = events.find((event) => event._tag === "review");

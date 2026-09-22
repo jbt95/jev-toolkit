@@ -136,6 +136,94 @@ describe("metrics", () => {
     expect(body).toContain('jev_sessions_with_calls_total{harness="cli"} 2');
   });
 
+  it("counts objective checkpoints and successful results", () => {
+    const checkpointBody = render(
+      collect([
+        ...events,
+        {
+          _tag: "checkpoint",
+          ts: "2026-09-17T00:08:00.000Z",
+          harness: "cli",
+          sessionID: "s1",
+          kind: "test",
+          result: "pass",
+          source: "ci",
+        },
+        {
+          _tag: "checkpoint",
+          ts: "2026-09-17T00:09:00.000Z",
+          harness: "cli",
+          sessionID: "s1",
+          kind: "test",
+          result: "fail",
+          source: "harness",
+        },
+      ]),
+    );
+
+    expect(checkpointBody).toContain(
+      'jev_checkpoints_total{harness="cli",kind="test",result="pass"} 1',
+    );
+    expect(checkpointBody).toContain(
+      'jev_checkpoints_total{harness="cli",kind="test",result="fail"} 1',
+    );
+    expect(checkpointBody).toContain('jev_checkpoint_success_ratio{harness="cli",kind="test"} 0.5');
+  });
+
+  it("exposes purpose, context, correction, cohort, and checkpoint-link metrics", () => {
+    const extendedBody = render(
+      collect([
+        ...events,
+        {
+          _tag: "call",
+          ts: "2026-09-17T00:08:00.000Z",
+          harness: "cli",
+          callID: "call-1",
+          purpose: "verify",
+          stateSizeBucket: "10k_50k",
+          model: "jev-test",
+          latencyMs: 10,
+          status: "ok",
+          questions: [{ id: "q5", type: "score" }],
+        },
+        {
+          _tag: "checkpoint",
+          ts: "2026-09-17T00:08:30.000Z",
+          harness: "cli",
+          callID: "call-1",
+          kind: "test",
+          result: "pass",
+          source: "ci",
+        },
+        {
+          _tag: "correction",
+          ts: "2026-09-17T00:08:45.000Z",
+          harness: "cli",
+          callID: "call-1",
+          kind: "accepted",
+          source: "operator",
+        },
+        {
+          _tag: "cohort",
+          ts: "2026-09-17T00:08:50.000Z",
+          harness: "cli",
+          sessionID: "s1",
+          cohort: "assisted",
+          source: "experiment",
+        },
+      ]),
+    );
+
+    expect(extendedBody).toContain('jev_call_purposes_total{harness="cli",purpose="verify"} 1');
+    expect(extendedBody).toContain('jev_call_state_size_total{harness="cli",bucket="10k_50k"} 1');
+    expect(extendedBody).toContain('jev_call_questions_total{harness="cli",type="score"} 2');
+    expect(extendedBody).toContain('jev_checkpoint_links_total{harness="cli",linked="true"} 1');
+    expect(extendedBody).toContain('jev_corrections_total{harness="cli",kind="accepted"} 1');
+    expect(extendedBody).toContain(
+      'jev_cohort_assignments_total{harness="cli",cohort="assisted"} 1',
+    );
+  });
+
   it("counts failed calls by typed error tag", () => {
     expect(body).toContain('jev_call_errors_total{harness="cli",reason="JevApiError"} 1');
     expect(body).toContain('jev_call_errors_total{harness="cli",reason="JevConfigError"} 1');
@@ -308,6 +396,14 @@ describe("metrics", () => {
       "jev_opportunities_total",
       "jev_compliance_ratio",
       "jev_triage_total",
+      "jev_checkpoints_total",
+      "jev_checkpoint_success_ratio",
+      "jev_checkpoint_links_total",
+      "jev_corrections_total",
+      "jev_cohort_assignments_total",
+      "jev_call_purposes_total",
+      "jev_call_state_size_total",
+      "jev_call_questions_total",
       "jev_latency_seconds",
       "jev_confidence",
       "jev_sessions_total",

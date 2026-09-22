@@ -2,7 +2,8 @@
 
 `jev` is the operator surface: judgments, triage, audit, labeling, and the
 meter. Every command that calls TypeSafe reads `TYPESAFE_API_KEY` at call time
-and appends a `call` event to the local log.
+and appends a `call` event to the local log. `jev checkpoint` records an
+operator- or automation-supplied objective outcome without calling TypeSafe.
 
 ```console
 jev ask                                  # {state, questions, model?} JSON on stdin
@@ -12,6 +13,9 @@ jev triage failure --transcript FILE     # pick the failing tool result, then cl
 jev triage review --input findings.json  # route findings: blockers/cosmetic/questions
 jev check commit --message-file FILE     # commit conformance (--spec, --replay built in)
 jev label sessions --since 24h           # outcome / friction / waste per session
+jev checkpoint --kind test --result pass  # record an objective outcome
+jev correction --kind accepted            # record an intervention response
+jev cohort --name holdout --session ID     # assign an experiment cohort
 jev route skills --task TEXT --skills-dir DIR   # pick the skill for a task
 jev audit run --since 24h                # detect quantitative claims agents made
 jev audit prompts --since 7d             # measure the live prompt trigger
@@ -242,14 +246,21 @@ Reads the local event log and compares identified labeled sessions with and
 without Jev calls. Cohorts are grouped by harness and task type.
 
 The report includes outcome counts, friction, waste, observed cost, tool
-errors, stop reasons, and attribution coverage. It also reports labels with
+errors, stop reasons, attribution coverage, a joined call/checkpoint funnel
+(linked-only outcomes; label totals cover unlinked work), correction coverage,
+per-call confidence calibration with expected calibration error and
+verify-purpose FP/FN counts, session timing including first linked success,
+and call overhead with missing-bucket counts. It also reports labels with
 missing digest facts. Anonymous labels remain in coverage but cannot join a
 cohort.
 
 `--harness` limits the report to one supported harness. `--json` emits the
 same report as a stable JSON object for scripts. Session identifiers and raw
-session text never appear in the report. The comparisons are observational and
-do not prove that Jev caused an outcome.
+session text never appear in the report. Explicit `callID` links never fall
+back: a mismatched id or a checkpoint predating its call stays unlinked.
+Only events without a call id join to the nearest prior same-session call
+within 30 minutes. The comparisons are observational and do not prove that
+Jev caused an outcome.
 
 ## doctor — local setup and health
 
@@ -341,10 +352,59 @@ jev events [--n 10] [--harness H] [--since 24h] [--type T] [--session ID]
 Prints the last `--n` matching events (default 10) as JSONL. Filters combine:
 `--harness` takes a harness tag or `all`, `--since` takes an `Nh`/`Nd` window,
 `--type` takes an event tag (`call`, `opportunity`, `triage`, `session_label`,
-`review`, `attribution`, `route`), and `--session` matches one session id. An
+`checkpoint`, `correction`, `cohort`, `review`, `attribution`, `route`), and `--session` matches one session id. An
 unknown harness, type, or window is a usage error that exits 1 — a filter is
 never silently dropped. The log is a single file; see
 [architecture.md](architecture.md#event-log) for the schema.
+
+## checkpoint — objective outcome
+
+```console
+jev checkpoint --kind KIND --result RESULT [--source SOURCE] [--session ID] [--call-id ID]
+```
+
+Records one privacy-safe downstream observation in the local event log. The
+command does not call TypeSafe and defaults to the `operator` source. Set
+`JEV_HARNESS` when recording an outcome for a specific harness; otherwise the
+harness is `cli`.
+
+Allowed values:
+
+- `--kind`: `test`, `lint`, `build`, `review`, `commit`, `rework`
+- `--result`: `pass`, `fail`, `resolved`, `reverted`
+- `--source`: `harness`, `ci`, `git`, `operator`
+
+Examples:
+
+```console
+jev checkpoint --kind test --result pass --source ci --session SESSION_ID
+JEV_HARNESS=opencode jev checkpoint --kind rework --result reverted --source git --session SESSION_ID
+```
+
+Raw output, code, diffs, and credentials are not accepted by this command. The
+meter exposes `jev_checkpoints_total` and
+`jev_checkpoint_success_ratio`; these are outcome observations, not causal
+proof that Jev produced the result.
+
+## correction — intervention response
+
+```console
+jev correction --kind KIND [--source harness|transcript|operator] [--session ID] [--call-id ID]
+```
+
+Records one closed-kind response without transcript text. Allowed kinds are
+`correction`, `override`, `clarification`, `handoff`, `accepted`, `rejected`,
+and `escalation`. The default source is `operator`.
+
+## cohort — explicit comparison assignment
+
+```console
+jev cohort --name assisted|holdout --session ID [--source operator|experiment]
+```
+
+Records an explicit opt-in assignment. `jev impact --json` reports these
+assignments separately from the observational call-derived split; assignment
+alone does not make a result causal.
 
 ## hook prompt — harness hook adapter
 

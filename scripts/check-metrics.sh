@@ -16,6 +16,9 @@ fi
 
 for metric in \
   jev_calls_total \
+  jev_call_purposes_total \
+  jev_call_state_size_total \
+  jev_call_questions_total \
   jev_tokens_total \
   jev_sessions_with_calls_total \
   jev_labeled_sessions_with_calls_total \
@@ -23,6 +26,11 @@ for metric in \
   jev_opportunities_total \
   jev_compliance_ratio \
   jev_triage_total \
+  jev_checkpoints_total \
+  jev_checkpoint_success_ratio \
+  jev_checkpoint_links_total \
+  jev_corrections_total \
+  jev_cohort_assignments_total \
   jev_latency_seconds \
   jev_confidence \
   jev_sessions_total \

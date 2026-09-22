@@ -56,13 +56,15 @@ applies only documented thresholds. Details in [docs/cli.md](docs/cli.md).
 
 **Impact report** — `jev impact` compares labeled sessions with and without Jev
 usage by harness and task type. It reports outcomes, friction, waste, cost,
-tool errors, stop reasons, and attribution coverage. Comparisons are
-observational, not causal.
+tool errors, stop reasons, attribution coverage, and the privacy-safe joined
+call/checkpoint funnel. Comparisons are observational, not causal.
 
 **Impact metrics** — every call, opportunity, triage, and label lands in one
 local JSONL event log; `jev meter serve` exposes Prometheus series for any
 scraper, rendered as the `Jev Impact` dashboard on a Grafana instance of your
-own. Details in [docs/metrics.md](docs/metrics.md).
+own. Objective outcomes can be recorded with `jev checkpoint`; details in
+[docs/metrics.md](docs/metrics.md). The broader impact roadmap is documented in
+[docs/telemetry.md](docs/telemetry.md).
 
 ## Install
 
@@ -102,7 +104,10 @@ jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 | `jev audit run`      | Detect claims agents made; compliance summary; `--dry-run`                             |
 | `jev audit prompts`  | Measure the live prompt trigger against real prompts                                   |
 | `jev label sessions` | Outcome, friction, and waste labels per session                                        |
-| `jev impact`         | Compare assisted and unassisted labeled sessions by harness and task type              |
+| `jev checkpoint`     | Record a privacy-safe test, build, review, commit, or rework outcome                   |
+| `jev correction`     | Record a privacy-safe accepted, rejected, override, clarification, or handoff event    |
+| `jev cohort`         | Assign a session to an explicit `assisted` or `holdout` cohort                         |
+| `jev impact`         | Joined funnel, calibration, timeline, overhead, and assisted/unassisted comparisons    |
 | `jev doctor`         | Check Node, API key, event log, meter, and harness session stores                      |
 | `jev route skills`   | Pick the skill for a task: `--task TEXT --skills-dir DIR`                              |
 | `jev eval pack`      | Replay labeled fixtures through a pack; agreement, drift, tokens, and latency          |
@@ -119,6 +124,7 @@ jobs — [docs/metrics.md](docs/metrics.md#always-on-meter-launchd).
 | [cli.md](docs/cli.md)                   | Every command with flags, examples, outputs, exit codes, and flow diagrams                                       |
 | [mcp.md](docs/mcp.md)                   | `typesafe_ask` protocol surface, tool schema, error contract, request lifecycle                                  |
 | [metrics.md](docs/metrics.md)           | Metric catalogue, dashboard, launchd meter, smoke test                                                           |
+| [telemetry.md](docs/telemetry.md)       | Impact telemetry roadmap, objective checkpoints, cohort design, privacy rules, and blog visualizations           |
 
 ## Layout
 

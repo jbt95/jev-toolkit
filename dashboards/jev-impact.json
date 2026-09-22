@@ -1557,6 +1557,215 @@
           }
         }
       ]
+    },
+    {
+      "id": 35,
+      "type": "row",
+      "title": "Objective outcomes",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 101
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Objective checkpoints",
+      "description": "Explicit test, lint, build, review, commit, and rework observations recorded by jev checkpoint.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 102
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind, result) (increase(jev_checkpoints_total[$__range]))",
+          "legendFormat": "{{kind}} / {{result}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 37,
+      "type": "stat",
+      "title": "Checkpoint success",
+      "description": "Mean pass/resolved ratio across harness and kind series. This is an outcome observation, not causal proof.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 102
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jev_checkpoint_success_ratio) / count(jev_checkpoint_success_ratio)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "row",
+      "title": "Intervention context",
+      "description": "Low-cardinality context for joined impact analysis; call and session ids stay offline.",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 111
+      }
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Calls by purpose",
+      "description": "Semantic call purpose without exposing question text or call ids.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 112
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (purpose) (increase(jev_call_purposes_total[$__range]))",
+          "legendFormat": "{{purpose}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (bucket) (increase(jev_call_state_size_total[$__range]))",
+          "legendFormat": "state {{bucket}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Corrections and linked checkpoints",
+      "description": "Observable intervention responses and explicit call-id coverage for checkpoints.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "claude-code-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 112
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(jev_corrections_total[$__range]))",
+          "legendFormat": "correction / {{kind}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (linked) (increase(jev_checkpoint_links_total[$__range]))",
+          "legendFormat": "checkpoint linked={{linked}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (cohort) (increase(jev_cohort_assignments_total[$__range]))",
+          "legendFormat": "cohort / {{cohort}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "claude-code-prom"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     }
   ]
 }

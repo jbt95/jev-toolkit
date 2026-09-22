@@ -10,12 +10,13 @@ flowchart LR
   AR["audit run<br/>opportunity events"]
   TR["triage · check<br/>triage events"]
   LS["label sessions<br/>session_label events"]
+  CP["checkpoint<br/>objective outcomes"]
   LOG[("events.jsonl")]
   METER["jev meter serve<br/>127.0.0.1:8788<br/>reads the log per scrape"]
   PROM["Prometheus<br/>scrape 30s"]
   GRAF["Grafana<br/>Jev Impact"]
 
-  JC & AR & TR & LS --> LOG --> METER --> PROM --> GRAF
+  JC & AR & TR & LS & CP --> LOG --> METER --> PROM --> GRAF
 ```
 
 ```console
@@ -31,6 +32,9 @@ query always reflects the current log.
 | Metric | Labels | Meaning |
 |---|---|---|
 | `jev_calls_total` | harness, status | Jev API calls (`ok`/`error`) |
+| `jev_call_purposes_total` | harness, purpose | Calls by closed semantic purpose; `unknown` is legacy coverage |
+| `jev_call_state_size_total` | harness, bucket | Calls by privacy-safe serialized state-size bucket (`0_1k`, `1k_10k`, `10k_50k`, `50k_plus`, or legacy `unknown`) |
+| `jev_call_questions_total` | harness, type | Question primitive counts (`choice`/`noul`/`score`) |
 | `jev_call_errors_total` | harness, reason | failed calls by typed tag (`JevConfigError`, `JevTransportError`, `JevTimeoutError`, `JevApiError`, `JevDecodeError`; `unknown` = written before tags existed) |
 | `jev_tokens_total` | harness, kind | TypeSafe input/output tokens |
 | `jev_sessions_with_calls_total` | harness | sessions with at least one Jev call |
@@ -39,6 +43,11 @@ query always reflects the current log.
 | `jev_opportunities_total` | harness, source, matched | detected claims, matched to Jev usage or missed |
 | `jev_compliance_ratio` | harness, source | matched / detected claims |
 | `jev_triage_total` | feature | triage runs (`failure`/`review`/`commit`) |
+| `jev_checkpoints_total` | harness, kind, result | objective outcome observations from `jev checkpoint` |
+| `jev_checkpoint_success_ratio` | harness, kind | `pass`/`resolved` checkpoints divided by all checkpoints of that kind |
+| `jev_checkpoint_links_total` | harness, linked | Checkpoints with or without an explicit call id |
+| `jev_corrections_total` | harness, kind | Privacy-safe correction and escalation observations |
+| `jev_cohort_assignments_total` | harness, cohort | Explicit `assisted`/`holdout` assignments |
 | `jev_latency_seconds` | harness, le | call latency histogram |
 | `jev_confidence` | primitive, le | confidence histogram for `choice`/`score` answers |
 | `jev_noul_probability` | harness, le | p(yes) histogram for `noul` answers, which carry no confidence |
@@ -99,6 +108,22 @@ Notes on semantics:
 - **Confidence** is recorded per answer, so a single call contributes several
   observations. `noul` answers carry no confidence field, so they feed
   `jev_noul_probability` with their p(yes) value instead.
+- **Checkpoints** are explicit outcome observations. `pass` and `resolved` count
+  as successful; `fail` and `reverted` count as unsuccessful. Checkpoints are
+  not deduplicated, so automation should append one event per observed outcome.
+  A checkpoint may carry a session id for later joins, but session ids are never
+  Prometheus labels.
+- **Joined impact** is an offline report, not a Prometheus label set. `jev
+  impact --json` joins a checkpoint to a call by `callID` with a causal-order
+  guard and no fallback for explicit ids, then falls back to the nearest prior
+  same-session call within 30 minutes only for events without a call id. It
+  reports the funnel, correction coverage, per-call calibration with ECE and
+  verify FP/FN, timing including first linked success, overhead with
+  missing-bucket counts, and explicit cohort comparisons with denominators;
+  unlinked checkpoints remain visible.
+- **Call identity** is local-log metadata only. New call events include an
+  opaque `callID` and a closed semantic `purpose`; older events may omit them
+  and remain valid. Neither id nor purpose is exposed as a Prometheus label.
 - **Harness tags** accept the pre-rename `opencode2` tag from the log and
   normalize it to `opencode`, so series stay continuous across commit 8030103.
 - Histograms use `le` buckets and expose `_bucket`/`_sum`/`_count` series.
@@ -112,6 +137,10 @@ sum by (outcome) (jev_sessions_total)
 histogram_quantile(0.9, sum by (le) (rate(jev_latency_seconds_bucket[1h])))
 sum by (harness) (jev_session_cost_usd)
 sum by (reason) (increase(jev_session_stop_reasons_total[1d]))
+sum by (kind, result) (increase(jev_checkpoints_total[1d]))
+jev_checkpoint_success_ratio
+sum by (purpose) (increase(jev_call_purposes_total[1d]))
+sum by (bucket) (increase(jev_call_state_size_total[1d]))
 time() - jev_meter_start_timestamp_seconds        # stale meter detector
 ```
 

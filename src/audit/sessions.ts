@@ -36,6 +36,9 @@ export const SessionDigest = Schema.Struct({
   costUsd: Schema.optional(Schema.Number),
   /** Subagent sessions record the session that spawned them. */
   parentSessionID: Schema.optional(Schema.String),
+  endedAt: Schema.optional(Schema.String),
+  durationMs: Schema.optional(Schema.Number),
+  firstToolAt: Schema.optional(Schema.String),
 });
 export type SessionDigest = Schema.Schema.Type<typeof SessionDigest>;
 
@@ -60,6 +63,8 @@ interface DigestDraft {
   stopReasons: Record<string, number>;
   parentSessionID: string;
   startedAt: string;
+  endedAt: string;
+  firstToolAt: string;
 }
 
 const newDraft = (): DigestDraft => ({
@@ -73,6 +78,8 @@ const newDraft = (): DigestDraft => ({
   stopReasons: {},
   parentSessionID: "",
   startedAt: "",
+  endedAt: "",
+  firstToolAt: "",
 });
 
 const recordPrompt = (draft: DigestDraft, text: string): void => {
@@ -84,6 +91,19 @@ const recordStartedAt = (draft: DigestDraft, timestamp: string | undefined): voi
   if (draft.startedAt !== "") return;
   const seen = Option.fromUndefinedOr(timestamp);
   if (Option.isSome(seen)) draft.startedAt = seen.value;
+};
+
+const recordEndedAt = (draft: DigestDraft, timestamp: string | undefined): void => {
+  const seen = Option.fromUndefinedOr(timestamp);
+  if (Option.isNone(seen)) return;
+  if (draft.endedAt === "" || seen.value > draft.endedAt) draft.endedAt = seen.value;
+};
+
+const recordFirstToolAt = (draft: DigestDraft, timestamp: string | undefined): void => {
+  const seen = Option.fromUndefinedOr(timestamp);
+  if (Option.isSome(seen) && (draft.firstToolAt === "" || seen.value < draft.firstToolAt)) {
+    draft.firstToolAt = seen.value;
+  }
 };
 
 const isTooOld = (timestamp: string | undefined, sinceIso: string): boolean =>
@@ -112,6 +132,12 @@ const draftDigest = (
   costUsd?: number,
 ): Option.Option<SessionDigest> => {
   if (draft.assistantTurns === 0 && draft.userPrompts.length === 0) return Option.none();
+  const startedMs = Date.parse(draft.startedAt);
+  const endedMs = Date.parse(draft.endedAt);
+  const durationMs =
+    Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs >= startedMs
+      ? endedMs - startedMs
+      : undefined;
   return Option.some({
     harness,
     sessionID,
@@ -122,6 +148,9 @@ const draftDigest = (
     errorCount: draft.errorCount,
     ...recordedFacts(draft),
     costUsd: preferredCost(draft, costUsd),
+    endedAt: draft.endedAt === "" ? undefined : draft.endedAt,
+    durationMs,
+    firstToolAt: draft.firstToolAt === "" ? undefined : draft.firstToolAt,
   });
 };
 
@@ -146,7 +175,8 @@ const countTools = (
   }>,
   toolCounts: Record<string, number>,
   toolPartType: string,
-): void => {
+): number => {
+  let count = 0;
   for (const item of content) {
     if (item.type !== toolPartType) continue;
     const name = Option.firstSomeOf([
@@ -155,7 +185,9 @@ const countTools = (
     ]);
     if (Option.isNone(name)) continue;
     toolCounts[name.value] = (toolCounts[name.value] ?? 0) + 1;
+    count += 1;
   }
+  return count;
 };
 
 const listJsonl = async (root: string): Promise<ReadonlyArray<string>> => {
@@ -194,9 +226,12 @@ const accumulateClaude = (draft: DigestDraft, entry: ClaudeEntry, sinceIso: stri
   const message = Option.fromUndefinedOr(entry.message);
   if (Option.isNone(message)) return;
   const content = message.value.content;
+  recordEndedAt(draft, entry.timestamp);
   if (entry.type === "assistant") {
     draft.assistantTurns += 1;
-    if (!isString(content)) countTools(content, draft.toolCounts, "tool_use");
+    if (!isString(content) && countTools(content, draft.toolCounts, "tool_use") > 0) {
+      recordFirstToolAt(draft, entry.timestamp);
+    }
     if (!isString(content)) {
       for (const item of content) {
         if (item.is_error === true) draft.errorCount += 1;
@@ -254,34 +289,62 @@ const accumulateOpencodeUser = (draft: DigestDraft, data: string): void => {
   if (Option.isSome(text)) recordPrompt(draft, text.value);
 };
 
-const accumulateOpencodeAssistant = (draft: DigestDraft, data: string): void => {
+const accumulateOpencodeAssistant = (draft: DigestDraft, data: string): number => {
   const decoded = decodeOpencodeAssistant(data);
-  if (Option.isNone(decoded)) return;
+  if (Option.isNone(decoded)) return 0;
   draft.assistantTurns += 1;
-  countTools(decoded.value.content, draft.toolCounts, "tool");
+  const toolCount = countTools(decoded.value.content, draft.toolCounts, "tool");
   for (const item of decoded.value.content) {
     if (item.type === "tool" && item.state?.status === "error") draft.errorCount += 1;
   }
+  return toolCount;
 };
+
+const OpencodeMessageRow = Schema.Struct({
+  type: Schema.String,
+  data: Schema.String,
+  time_created: Schema.optional(Schema.Number),
+});
+const decodeOpencodeMessageRow = Schema.decodeUnknownOption(OpencodeMessageRow);
+const decodeTableColumn = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }));
 
 const digestOpencodeSession = (
   db: DatabaseSync,
   session: OpencodeSessionRow,
 ): Option.Option<SessionDigest> => {
   const draft = newDraft();
+  const hasMessageTime = db
+    .prepare("PRAGMA table_info(session_message)")
+    .all()
+    .some((column) =>
+      Option.match(decodeTableColumn(column), {
+        onNone: () => false,
+        onSome: (decoded) => decoded.name === "time_created",
+      }),
+    );
   const messages = db
-    .prepare("SELECT type, data FROM session_message WHERE session_id = ?")
+    .prepare(
+      hasMessageTime
+        ? "SELECT type, data, time_created FROM session_message WHERE session_id = ?"
+        : "SELECT type, data FROM session_message WHERE session_id = ?",
+    )
     .all(session.id);
   for (const message of messages) {
-    const messageType = message["type"];
-    const data = message["data"];
-    if (!isString(data)) continue;
+    const decoded = decodeOpencodeMessageRow(message);
+    if (Option.isNone(decoded)) continue;
+    const { type: messageType, data, time_created: timeCreated } = decoded.value;
+    const timestamp = Option.map(Option.fromUndefinedOr(timeCreated), (value) =>
+      new Date(value).toISOString(),
+    );
+    if (Option.isSome(timestamp)) recordEndedAt(draft, timestamp.value);
     if (messageType === "user") {
       accumulateOpencodeUser(draft, data);
       continue;
     }
     if (messageType !== "assistant") continue;
-    accumulateOpencodeAssistant(draft, data);
+    if (accumulateOpencodeAssistant(draft, data) > 0 && Option.isSome(timestamp)) {
+      recordFirstToolAt(draft, timestamp.value);
+    }
   }
   draft.startedAt = new Date(session.time_created).toISOString();
   return draftDigest("opencode", session.id, draft, session.cost);
@@ -338,9 +401,9 @@ const accumulateUsage = (
 type PiMessage = NonNullable<PiOmpEntry["message"]>;
 
 /** Assistant turns carry tools, usage, and the reason the turn ended. */
-const accumulateAssistant = (draft: DigestDraft, message: PiMessage): void => {
+const accumulateAssistant = (draft: DigestDraft, message: PiMessage): number => {
   draft.assistantTurns += 1;
-  countTools(message.content, draft.toolCounts, "toolCall");
+  const toolCount = countTools(message.content, draft.toolCounts, "toolCall");
   for (const item of message.content) {
     if (item.is_error === true) draft.errorCount += 1;
   }
@@ -350,6 +413,7 @@ const accumulateAssistant = (draft: DigestDraft, message: PiMessage): void => {
   if (Option.isSome(stopReason)) {
     draft.stopReasons[stopReason.value] = (draft.stopReasons[stopReason.value] ?? 0) + 1;
   }
+  return toolCount;
 };
 
 /** Tool results report failure on the message, not on a content part. */
@@ -363,9 +427,12 @@ const accumulatePi = (draft: DigestDraft, entry: PiOmpEntry, sinceIso: string): 
   if (entry.type !== "message") return;
   const message = Option.fromUndefinedOr(entry.message);
   if (Option.isNone(message)) return;
+  recordEndedAt(draft, entry.timestamp);
   switch (message.value.role) {
     case "assistant":
-      accumulateAssistant(draft, message.value);
+      if (accumulateAssistant(draft, message.value) > 0) {
+        recordFirstToolAt(draft, entry.timestamp);
+      }
       return;
     case "toolResult":
       accumulateToolResult(draft, message.value);

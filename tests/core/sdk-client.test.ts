@@ -62,6 +62,8 @@ describe("makeSdkJevClient", () => {
     const first = events[0];
     if (first?._tag !== "call") throw new Error("expected a call event");
     expect(first.status).toBe("ok");
+    expect(first.callID).toEqual(expect.any(String));
+    expect(first.purpose).toBe("ask");
   });
 
   it("accepts in-range choices and scores with SDK legends", async () => {

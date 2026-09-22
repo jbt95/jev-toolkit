@@ -66,7 +66,29 @@ describe("JevClient", () => {
     const first = events[0];
     if (first?._tag !== "call") throw new Error("expected a call event");
     expect(first.status).toBe("ok");
+    expect(first.callID).toEqual(expect.any(String));
+    expect(first.callID?.length).toBeGreaterThan(0);
+    expect(first.purpose).toBe("ask");
+    expect(first.stateSizeBucket).toBe("0_1k");
     expect(first.tokens).toEqual({ input: 100, output: 10 });
+  });
+
+  it("preserves a supplied call identity and semantic purpose", async () => {
+    const path = await tempEventsPath();
+    const client = makeJevClient({
+      apiKey: Option.some("test-key"),
+      transport: makeTestTransport(() => Effect.succeed(cannedSuccess)),
+      log: makeEventLog(path),
+    });
+
+    await Effect.runPromise(
+      client.ask({ ...sampleInput, callID: "call-local-1", purpose: "claim_detection" }),
+    );
+
+    const event = (await Effect.runPromise(makeEventLog(path).read())).find(
+      (entry) => entry._tag === "call",
+    );
+    expect(event).toMatchObject({ callID: "call-local-1", purpose: "claim_detection" });
   });
 
   it("logs an error event and fails with JevApiError on HTTP failure", async () => {

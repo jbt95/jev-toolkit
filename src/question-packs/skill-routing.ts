@@ -233,6 +233,7 @@ export const planSkillFollowUp = (
           })),
         },
         questions: skillFollowUpQuestions(input, first.skill),
+        purpose: "route",
       }),
     );
     if (outcome._tag === "Failure") return { error: outcome.failure };

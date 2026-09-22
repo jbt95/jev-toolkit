@@ -72,6 +72,24 @@ export type Answer = Schema.Schema.Type<typeof Answer>;
 export const AnswerMap = Schema.Record(Schema.String, Answer);
 export type AnswerMap = Schema.Schema.Type<typeof AnswerMap>;
 
+/** Closed semantic purpose for a Jev judgment; raw task text never belongs here. */
+export const CallPurpose = Schema.Literals([
+  "ask",
+  "claim_detection",
+  "claim_alignment",
+  "session_label",
+  "commit_check",
+  "review",
+  "verify",
+  "route",
+  "triage",
+  "eval",
+]);
+export type CallPurpose = Schema.Schema.Type<typeof CallPurpose>;
+
+export const StateSizeBucket = Schema.Literals(["0_1k", "1k_10k", "10k_50k", "50k_plus"]);
+export type StateSizeBucket = Schema.Schema.Type<typeof StateSizeBucket>;
+
 const BaseEvent = {
   ts: Schema.String,
   harness: HarnessTag,
@@ -80,6 +98,12 @@ const BaseEvent = {
 
 export const CallEvent = Schema.TaggedStruct("call", {
   ...BaseEvent,
+  /** Optional for backwards-compatible decoding of pre-identity events. */
+  callID: Schema.optional(Schema.String),
+  /** Optional for backwards-compatible decoding of pre-purpose events. */
+  purpose: Schema.optional(CallPurpose),
+  /** Serialized state size bucket; raw state never enters the event. */
+  stateSizeBucket: Schema.optional(StateSizeBucket),
   model: Schema.String,
   latencyMs: Schema.Number,
   status: Schema.Literals(["ok", "error"]),
@@ -156,8 +180,76 @@ export const SessionLabelEvent = Schema.TaggedStruct("session_label", {
   toolErrors: Schema.optional(Schema.Number),
   stopReasons: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
   parentSessionID: Schema.optional(Schema.String),
+  startedAt: Schema.optional(Schema.String),
+  endedAt: Schema.optional(Schema.String),
+  durationMs: Schema.optional(Schema.Number),
+  firstToolAt: Schema.optional(Schema.String),
 });
 export type SessionLabelEvent = Schema.Schema.Type<typeof SessionLabelEvent>;
+
+export const CheckpointKind = Schema.Literals([
+  "test",
+  "lint",
+  "build",
+  "review",
+  "commit",
+  "rework",
+]);
+export type CheckpointKind = Schema.Schema.Type<typeof CheckpointKind>;
+
+export const CheckpointResult = Schema.Literals(["pass", "fail", "resolved", "reverted"]);
+export type CheckpointResult = Schema.Schema.Type<typeof CheckpointResult>;
+
+export const CheckpointSource = Schema.Literals(["harness", "ci", "git", "operator"]);
+export type CheckpointSource = Schema.Schema.Type<typeof CheckpointSource>;
+
+/** One privacy-safe downstream outcome observation; raw evidence stays local. */
+export const CheckpointEvent = Schema.TaggedStruct("checkpoint", {
+  ...BaseEvent,
+  callID: Schema.optional(Schema.String),
+  kind: CheckpointKind,
+  result: CheckpointResult,
+  source: CheckpointSource,
+});
+export type CheckpointEvent = Schema.Schema.Type<typeof CheckpointEvent>;
+
+export const CorrectionKind = Schema.Literals([
+  "correction",
+  "override",
+  "clarification",
+  "handoff",
+  "accepted",
+  "rejected",
+  "escalation",
+]);
+export type CorrectionKind = Schema.Schema.Type<typeof CorrectionKind>;
+
+export const CorrectionSource = Schema.Literals(["harness", "transcript", "operator"]);
+export type CorrectionSource = Schema.Schema.Type<typeof CorrectionSource>;
+
+/** Privacy-safe record of an observable intervention response. */
+export const CorrectionEvent = Schema.TaggedStruct("correction", {
+  ...BaseEvent,
+  callID: Schema.optional(Schema.String),
+  kind: CorrectionKind,
+  source: CorrectionSource,
+});
+export type CorrectionEvent = Schema.Schema.Type<typeof CorrectionEvent>;
+
+export const CohortName = Schema.Literals(["assisted", "holdout"]);
+export type CohortName = Schema.Schema.Type<typeof CohortName>;
+
+export const CohortSource = Schema.Literals(["operator", "experiment"]);
+export type CohortSource = Schema.Schema.Type<typeof CohortSource>;
+
+/** Explicit assignment for an opt-in observational or controlled comparison. */
+export const CohortEvent = Schema.TaggedStruct("cohort", {
+  ...BaseEvent,
+  sessionID: Schema.String,
+  cohort: CohortName,
+  source: CohortSource,
+});
+export type CohortEvent = Schema.Schema.Type<typeof CohortEvent>;
 
 /**
  * A call recovered to a session offline by `audit run`. No harness forwards a
@@ -199,6 +291,9 @@ export const EventTag = Schema.Literals([
   "opportunity",
   "triage",
   "session_label",
+  "checkpoint",
+  "correction",
+  "cohort",
   "review",
   "attribution",
   "route",
@@ -210,6 +305,9 @@ export const JevEvent = Schema.Union([
   OpportunityEvent,
   TriageEvent,
   SessionLabelEvent,
+  CheckpointEvent,
+  CorrectionEvent,
+  CohortEvent,
   ReviewEvent,
   AttributionEvent,
   RouteEvent,

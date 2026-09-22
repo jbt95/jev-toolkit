@@ -6,6 +6,9 @@ import { createServer, type ServerResponse } from "node:http";
 import type { EventLogService, EventLogStats } from "./events.ts";
 import type {
   AttributionEvent,
+  CheckpointEvent,
+  CohortEvent,
+  CorrectionEvent,
   RouteEvent,
   CallEvent,
   JevEvent,
@@ -145,6 +148,9 @@ const splitKey = (key: string): readonly [string, string] => {
 interface EventAccumulator {
   readonly calls: Map<string, { ok: number; error: number }>;
   readonly callErrors: Map<string, number>;
+  readonly callPurposes: Map<string, number>;
+  readonly callStateSizes: Map<string, number>;
+  readonly callQuestions: Map<string, number>;
   readonly skillRoutes: Map<string, number>;
   readonly tokens: Map<string, { input: number; output: number }>;
   readonly opportunities: Map<string, { matched: number; missed: number }>;
@@ -167,11 +173,19 @@ interface EventAccumulator {
   readonly reviewDirections: Map<string, number>;
   readonly latestLabel: Map<string, SessionLabelEvent>;
   readonly anonymousLabels: Array<SessionLabelEvent>;
+  readonly checkpoints: Map<string, number>;
+  readonly checkpointTotals: Map<string, { success: number; total: number }>;
+  readonly checkpointLinks: Map<string, number>;
+  readonly corrections: Map<string, number>;
+  readonly cohorts: Map<string, number>;
 }
 
 const newAccumulator = (): EventAccumulator => ({
   calls: new Map(),
   callErrors: new Map(),
+  callPurposes: new Map(),
+  callStateSizes: new Map(),
+  callQuestions: new Map(),
   skillRoutes: new Map(),
   tokens: new Map(),
   opportunities: new Map(),
@@ -194,6 +208,11 @@ const newAccumulator = (): EventAccumulator => ({
   reviewDirections: new Map(),
   latestLabel: new Map(),
   anonymousLabels: [],
+  checkpoints: new Map(),
+  checkpointTotals: new Map(),
+  checkpointLinks: new Map(),
+  corrections: new Map(),
+  cohorts: new Map(),
 });
 
 const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
@@ -205,6 +224,14 @@ const collectCall = (acc: EventAccumulator, event: CallEvent): void => {
     acc.callErrors.set(reasonKey, (acc.callErrors.get(reasonKey) ?? 0) + 1);
   }
   acc.calls.set(event.harness, entry);
+  const purposeKey = `${event.harness}|${event.purpose ?? "unknown"}`;
+  acc.callPurposes.set(purposeKey, (acc.callPurposes.get(purposeKey) ?? 0) + 1);
+  const stateKey = `${event.harness}|${event.stateSizeBucket ?? "unknown"}`;
+  acc.callStateSizes.set(stateKey, (acc.callStateSizes.get(stateKey) ?? 0) + 1);
+  for (const question of event.questions) {
+    const questionKey = `${event.harness}|${question.type}`;
+    acc.callQuestions.set(questionKey, (acc.callQuestions.get(questionKey) ?? 0) + 1);
+  }
 
   const eventTokens = Option.fromUndefinedOr(event.tokens);
   if (Option.isSome(eventTokens)) {
@@ -252,6 +279,29 @@ const collectAttribution = (acc: EventAccumulator, event: AttributionEvent): voi
   const set = acc.sessions.get(event.harness) ?? new Set<string>();
   set.add(event.sessionID);
   acc.sessions.set(event.harness, set);
+};
+
+const collectCheckpoint = (acc: EventAccumulator, event: CheckpointEvent): void => {
+  const resultKey = `${event.harness}|${event.kind}|${event.result}`;
+  acc.checkpoints.set(resultKey, (acc.checkpoints.get(resultKey) ?? 0) + 1);
+
+  const kindKey = `${event.harness}|${event.kind}`;
+  const totals = acc.checkpointTotals.get(kindKey) ?? { success: 0, total: 0 };
+  totals.total += 1;
+  if (event.result === "pass" || event.result === "resolved") totals.success += 1;
+  acc.checkpointTotals.set(kindKey, totals);
+  const linkKey = `${event.harness}|${event.callID === undefined ? "false" : "true"}`;
+  acc.checkpointLinks.set(linkKey, (acc.checkpointLinks.get(linkKey) ?? 0) + 1);
+};
+
+const collectCorrection = (acc: EventAccumulator, event: CorrectionEvent): void => {
+  const key = `${event.harness}|${event.kind}`;
+  acc.corrections.set(key, (acc.corrections.get(key) ?? 0) + 1);
+};
+
+const collectCohort = (acc: EventAccumulator, event: CohortEvent): void => {
+  const key = `${event.harness}|${event.cohort}`;
+  acc.cohorts.set(key, (acc.cohorts.get(key) ?? 0) + 1);
 };
 
 const collectOpportunity = (acc: EventAccumulator, event: OpportunityEvent): void => {
@@ -401,7 +451,15 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
   const acc = newAccumulator();
   const {
     callErrors,
+    callPurposes,
+    callQuestions,
+    callStateSizes,
+    checkpointTotals,
+    checkpoints,
+    checkpointLinks,
     calls,
+    cohorts,
+    corrections,
     confidence,
     labeledSessions,
     latency,
@@ -433,6 +491,15 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         break;
       case "attribution":
         collectAttribution(acc, event);
+        break;
+      case "checkpoint":
+        collectCheckpoint(acc, event);
+        break;
+      case "correction":
+        collectCorrection(acc, event);
+        break;
+      case "cohort":
+        collectCohort(acc, event);
         break;
       case "route":
         collectRoute(acc, event);
@@ -476,6 +543,27 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
         ),
       ]),
     },
+    keyedFamily(
+      "jev_call_purposes_total",
+      "Jev calls by semantic purpose; unknown covers pre-purpose events.",
+      "counter",
+      ["harness", "purpose"],
+      callPurposes,
+    ),
+    keyedFamily(
+      "jev_call_state_size_total",
+      "Jev calls by privacy-safe serialized state-size bucket.",
+      "counter",
+      ["harness", "bucket"],
+      callStateSizes,
+    ),
+    keyedFamily(
+      "jev_call_questions_total",
+      "Jev questions by harness and primitive type.",
+      "counter",
+      ["harness", "type"],
+      callQuestions,
+    ),
     {
       name: "jev_tokens_total",
       help: "TypeSafe tokens by harness and kind.",
@@ -566,6 +654,50 @@ export function collect(events: ReadonlyArray<JevEvent>, health?: MeterHealth): 
       }),
     },
     keyedFamily("jev_triage_total", "Triage runs by feature.", "counter", ["feature"], triage),
+    keyedFamily(
+      "jev_checkpoints_total",
+      "Objective checkpoints by harness, kind, and result.",
+      "counter",
+      ["harness", "kind", "result"],
+      checkpoints,
+    ),
+    {
+      name: "jev_checkpoint_success_ratio",
+      help: "Successful objective checkpoints by harness and kind.",
+      type: "gauge",
+      lines: sorted(checkpointTotals).map(([key, totals]) => {
+        const [harness, kind] = splitKey(key);
+        return sample(
+          "jev_checkpoint_success_ratio",
+          [
+            ["harness", harness],
+            ["kind", kind],
+          ],
+          totals.total === 0 ? 0 : round(totals.success / totals.total),
+        );
+      }),
+    },
+    keyedFamily(
+      "jev_checkpoint_links_total",
+      "Objective checkpoints with an explicit call identity, by harness.",
+      "counter",
+      ["harness", "linked"],
+      checkpointLinks,
+    ),
+    keyedFamily(
+      "jev_corrections_total",
+      "Privacy-safe intervention responses by harness and kind.",
+      "counter",
+      ["harness", "kind"],
+      corrections,
+    ),
+    keyedFamily(
+      "jev_cohort_assignments_total",
+      "Explicit comparison-cohort assignments by harness and cohort.",
+      "counter",
+      ["harness", "cohort"],
+      cohorts,
+    ),
     {
       name: "jev_latency_seconds",
       help: "Jev call latency in seconds, by harness.",

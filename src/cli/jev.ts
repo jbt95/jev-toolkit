@@ -58,7 +58,25 @@ import {
   opencodeDbPath,
   piSessionsDir,
 } from "../core/paths.ts";
-import { EventTag, Harness, QuestionMap, type CallEvent, type JevEvent } from "../core/schema.ts";
+import {
+  CheckpointKind,
+  CheckpointResult,
+  CheckpointSource,
+  CohortName,
+  CohortSource,
+  CorrectionKind,
+  CorrectionSource,
+  EventTag,
+  Harness,
+  QuestionMap,
+  type CallEvent,
+  type CheckpointKind as CheckpointKindValue,
+  type CheckpointResult as CheckpointResultValue,
+  type CheckpointSource as CheckpointSourceValue,
+  type CohortSource as CohortSourceValue,
+  type CorrectionSource as CorrectionSourceValue,
+  type JevEvent,
+} from "../core/schema.ts";
 import { clip, redact, stripFencedCode } from "../core/text.ts";
 import { transcriptFailureCandidates } from "../core/transcript.ts";
 import { createMcpDeps, serveMcp, type JevAsk } from "../mcp/server.ts";
@@ -118,6 +136,9 @@ commands:
   hook     harness hooks: jev hook prompt [--verify] | jev hook context
   check    commit conformance: jev check commit --message-file FILE
   label    session labeling: jev label sessions [--since 24h] [--dry-run]
+  checkpoint record an objective outcome: jev checkpoint --kind KIND --result RESULT [--source SOURCE] [--session ID] [--call-id ID]
+  correction record an intervention response: jev correction --kind KIND [--source SOURCE] [--session ID] [--call-id ID]
+  cohort    assign a session to a comparison cohort: jev cohort --name assisted|holdout --session ID [--source SOURCE]
   impact   compare Jev-assisted and unassisted sessions: jev impact [--since 7d] [--json]
   doctor   check local setup and health: jev doctor [--json]
   route    pick the skill for a task: jev route skills --task TEXT --skills-dir DIR
@@ -335,6 +356,7 @@ const runHook = (
         harness,
         state: { messages: [{ id: "m0", text: safePrompt }] },
         questions: claimDetectionQuestions({ count: 1, subject: "user_prompt" }),
+        purpose: "claim_detection",
       }),
     );
     if (outcome._tag === "Failure") {
@@ -406,6 +428,37 @@ const printImpactReport = (report: ImpactReport): void => {
       `tool_errors=${report.coverage.labelsMissingToolErrors} ` +
       `stop_reasons=${report.coverage.labelsMissingStopReasons}`,
   );
+  console.log(
+    `funnel: calls=${report.funnel.calls} identified=${report.funnel.identifiedCalls} ` +
+      `linked_interventions=${report.funnel.linkedInterventions} ` +
+      `checkpoints=${report.funnel.linkedCheckpoints}/${report.funnel.checkpoints} ` +
+      `unlinked_checkpoints=${report.funnel.unlinkedCheckpoints} ` +
+      `missing_call_id=${report.funnel.checkpointsMissingCallID} ` +
+      `successful=${report.funnel.successfulCheckpoints} shipped=${report.funnel.shippedSessions} ` +
+      `reworked=${report.funnel.reworkedSessions} reverted=${report.funnel.revertedSessions}`,
+  );
+  console.log(
+    `corrections: total=${report.corrections.total} linked=${report.corrections.linkedToCall} ` +
+      `sessions=${report.corrections.sessions}`,
+  );
+  console.log(
+    `timeline: duration_mean_ms=${report.timeline.meanDurationMs ?? "n/a"} ` +
+      `first_tool_mean_ms=${report.timeline.meanTimeToFirstToolMs ?? "n/a"} ` +
+      `call_to_success_mean_ms=${report.timeline.meanCallToSuccessfulCheckpointMs ?? "n/a"} ` +
+      `first_success_mean_ms=${report.timeline.meanCallToFirstSuccessfulCheckpointMs ?? "n/a"}`,
+  );
+  console.log(
+    `calibration: observations=${report.calibration.observations} ` +
+      `successes=${report.calibration.successes} ` +
+      `ece=${report.calibration.expectedCalibrationError?.toFixed(3) ?? "n/a"} ` +
+      `verify_fp=${report.calibration.verify.falsePositives} ` +
+      `verify_fn=${report.calibration.verify.falseNegatives}`,
+  );
+  console.log(
+    `overhead: questions=${report.overhead.questionCount} ` +
+      `input_tokens=${report.overhead.inputTokens} output_tokens=${report.overhead.outputTokens} ` +
+      `latency_mean_ms=${report.overhead.meanLatencyMs ?? "n/a"}`,
+  );
   if (report.comparisons.length === 0) {
     console.log("cohorts: none");
     return;
@@ -414,6 +467,11 @@ const printImpactReport = (report: ImpactReport): void => {
     console.log(`cohort: ${comparison.harness} task=${comparison.taskType}`);
     console.log(`  assisted:   ${formatImpactStats(comparison.assisted)}`);
     console.log(`  unassisted: ${formatImpactStats(comparison.unassisted)}`);
+  }
+  for (const comparison of report.cohortComparisons) {
+    console.log(`assigned cohort: ${comparison.harness} task=${comparison.taskType}`);
+    console.log(`  assisted: ${formatImpactStats(comparison.assisted)}`);
+    console.log(`  holdout:  ${formatImpactStats(comparison.holdout)}`);
   }
 };
 
@@ -470,7 +528,7 @@ const runEvents = (rest: ReadonlyArray<string>): Effect.Effect<number, string, C
     const wantedTag = Option.flatMap(typeFlag, (tag) => Schema.decodeUnknownOption(EventTag)(tag));
     if (Option.isSome(typeFlag) && Option.isNone(wantedTag)) {
       return yield* Effect.fail(
-        `unknown --type: ${typeFlag.value} (use call, opportunity, triage, session_label, review, attribution, route)`,
+        `unknown --type: ${typeFlag.value} (use call, opportunity, triage, session_label, checkpoint, correction, cohort, review, attribution, route)`,
       );
     }
     const session = flag(rest, "--session");
@@ -485,6 +543,137 @@ const runEvents = (rest: ReadonlyArray<string>): Effect.Effect<number, string, C
     const tail = matching.slice(-limit);
     yield* Effect.sync(() => {
       for (const event of tail) console.log(JSON.stringify(event));
+    });
+    return 0;
+  });
+
+const CHECKPOINT_USAGE =
+  "usage: jev checkpoint --kind test|lint|build|review|commit|rework " +
+  "--result pass|fail|resolved|reverted [--source harness|ci|git|operator] [--session ID] [--call-id ID]";
+
+const parseCheckpointKind = (value: string): Option.Option<CheckpointKindValue> =>
+  Schema.decodeUnknownOption(CheckpointKind)(value);
+
+const parseCheckpointResult = (value: string): Option.Option<CheckpointResultValue> =>
+  Schema.decodeUnknownOption(CheckpointResult)(value);
+
+const parseCheckpointSource = (value: string): Option.Option<CheckpointSourceValue> =>
+  Schema.decodeUnknownOption(CheckpointSource)(value);
+
+const runCheckpoint = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runCheckpointProgram() {
+    const kindFlag = flag(rest, "--kind");
+    const resultFlag = flag(rest, "--result");
+    const sourceFlag = flag(rest, "--source");
+    const kind = Option.flatMap(kindFlag, parseCheckpointKind);
+    const result = Option.flatMap(resultFlag, parseCheckpointResult);
+    const source = Option.match(sourceFlag, {
+      onNone: () => Option.some<CheckpointSourceValue>("operator"),
+      onSome: parseCheckpointSource,
+    });
+    if (Option.isNone(kind) || Option.isNone(result) || Option.isNone(source)) {
+      yield* Effect.sync(() => {
+        console.error(CHECKPOINT_USAGE);
+      });
+      return 1;
+    }
+
+    const log = yield* EventLog;
+    const harness = harnessFromEnv("cli");
+    const now = yield* Clock.currentTimeMillis;
+    const sessionID = flag(rest, "--session");
+    const callID = flag(rest, "--call-id");
+    yield* log
+      .append({
+        _tag: "checkpoint",
+        ts: new Date(now).toISOString(),
+        harness,
+        sessionID: Option.getOrUndefined(sessionID),
+        callID: Option.getOrUndefined(callID),
+        kind: kind.value,
+        result: result.value,
+        source: source.value,
+      })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    yield* Effect.sync(() => {
+      console.log(
+        `checkpoint recorded: kind=${kind.value} result=${result.value} source=${source.value}`,
+      );
+    });
+    return 0;
+  });
+
+const CORRECTION_USAGE =
+  "usage: jev correction --kind correction|override|clarification|handoff|accepted|rejected|escalation " +
+  "[--source harness|transcript|operator] [--session ID] [--call-id ID]";
+
+const runCorrection = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runCorrectionProgram() {
+    const kindFlag = flag(rest, "--kind");
+    const sourceFlag = flag(rest, "--source");
+    const kind = Option.flatMap(kindFlag, (value) =>
+      Schema.decodeUnknownOption(CorrectionKind)(value),
+    );
+    const source = Option.match(sourceFlag, {
+      onNone: () => Option.some<CorrectionSourceValue>("operator"),
+      onSome: (value) => Schema.decodeUnknownOption(CorrectionSource)(value),
+    });
+    if (Option.isNone(kind) || Option.isNone(source)) {
+      yield* Effect.sync(() => console.error(CORRECTION_USAGE));
+      return 1;
+    }
+
+    const log = yield* EventLog;
+    const now = yield* Clock.currentTimeMillis;
+    yield* log
+      .append({
+        _tag: "correction",
+        ts: new Date(now).toISOString(),
+        harness: harnessFromEnv("cli"),
+        sessionID: Option.getOrUndefined(flag(rest, "--session")),
+        callID: Option.getOrUndefined(flag(rest, "--call-id")),
+        kind: kind.value,
+        source: source.value,
+      })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    yield* Effect.sync(() => {
+      console.log(`correction recorded: kind=${kind.value} source=${source.value}`);
+    });
+    return 0;
+  });
+
+const COHORT_USAGE =
+  "usage: jev cohort --name assisted|holdout --session ID [--source operator|experiment]";
+
+const runCohort = (rest: ReadonlyArray<string>): Effect.Effect<number, string, CliServices> =>
+  Effect.gen(function* runCohortProgram() {
+    const nameFlag = flag(rest, "--name");
+    const sessionFlag = flag(rest, "--session");
+    const sourceFlag = flag(rest, "--source");
+    const name = Option.flatMap(nameFlag, (value) => Schema.decodeUnknownOption(CohortName)(value));
+    const source = Option.match(sourceFlag, {
+      onNone: () => Option.some<CohortSourceValue>("operator"),
+      onSome: (value) => Schema.decodeUnknownOption(CohortSource)(value),
+    });
+    if (Option.isNone(name) || Option.isNone(sessionFlag) || Option.isNone(source)) {
+      yield* Effect.sync(() => console.error(COHORT_USAGE));
+      return 1;
+    }
+
+    const log = yield* EventLog;
+    const now = yield* Clock.currentTimeMillis;
+    yield* log
+      .append({
+        _tag: "cohort",
+        ts: new Date(now).toISOString(),
+        harness: harnessFromEnv("cli"),
+        sessionID: sessionFlag.value,
+        cohort: name.value,
+        source: source.value,
+      })
+      .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
+    yield* Effect.sync(() => {
+      console.log(`cohort recorded: name=${name.value} session=${sessionFlag.value}`);
     });
     return 0;
   });
@@ -537,6 +726,7 @@ export function runCli(
               questions: payload.questions,
               model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
               sessionID: payload.sessionID,
+              purpose: "ask",
             })
             .pipe(Effect.mapError(describeJevError));
           yield* Effect.sync(() => {
@@ -555,6 +745,15 @@ export function runCli(
         }
         case "impact": {
           return yield* runImpact(rest);
+        }
+        case "checkpoint": {
+          return yield* runCheckpoint(rest);
+        }
+        case "correction": {
+          return yield* runCorrection(rest);
+        }
+        case "cohort": {
+          return yield* runCohort(rest);
         }
         case "doctor": {
           return yield* runDoctor(rest);
@@ -755,6 +954,7 @@ const detectClaimsInBatches = (
           messages: batch.map((item, index) => ({ id: `m${index}`, text: item.text })),
         },
         questions: claimDetectionQuestions({ count: batch.length, subject }),
+        purpose: "claim_detection",
       }).pipe(Effect.mapError(describeJevError));
       for (const claim of detectedClaims(result.answers, batch.length)) {
         found.push([start + claim.index, claim] as const);
@@ -1060,6 +1260,7 @@ const correlateAuditClaims = (
           questions: claimAlignmentQuestions(
             batch.map((item, index) => ({ id: `a${index}`, excerpt: item.context })),
           ),
+          purpose: "claim_alignment",
         }).pipe(Effect.mapError(describeJevError));
         const matchedIndexes = new Set(alignedIndexes(result.answers, batch.length));
         batch.forEach((item, index) => {
@@ -1221,7 +1422,12 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
     for (let start = 0; start < digests.length; start += 10) {
       const batch = digests.slice(start, start + 10);
       const result = yield* client
-        .ask({ harness, state: { sessions: batch }, questions: labelQuestions(batch) })
+        .ask({
+          harness,
+          state: { sessions: batch },
+          questions: labelQuestions(batch),
+          purpose: "session_label",
+        })
         .pipe(Effect.mapError(describeJevError));
       const pickOutcome = (key: string): (typeof outcomeValues)[number] =>
         choiceOf(result.answers, key).pipe(
@@ -1260,6 +1466,10 @@ const runLabel = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
             toolErrors: digest.value.errorCount,
             stopReasons: digest.value.stopReasons,
             parentSessionID: digest.value.parentSessionID,
+            startedAt: digest.value.startedAt.length > 0 ? digest.value.startedAt : undefined,
+            endedAt: digest.value.endedAt,
+            durationMs: digest.value.durationMs,
+            firstToolAt: digest.value.firstToolAt,
           })
           .pipe(Effect.mapError((error) => `event log ${error.operation} failed`));
         labeled += 1;
@@ -1309,6 +1519,7 @@ const runCheck = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
             harness,
             state,
             questions: commitQuestions({ message, spec: Option.getOrUndefined(spec) }),
+            purpose: "commit_check",
           })
           .pipe(Effect.mapError(describeJevError));
         return verdictFor({
@@ -1438,6 +1649,7 @@ const runRoute = (rest: ReadonlyArray<string>): Effect.Effect<number, string, Cl
           })),
         },
         questions: skillRouteQuestions(input),
+        purpose: "route",
       })
       .pipe(Effect.mapError(describeJevError));
     const route = skillRoute(input, result.answers);
@@ -1530,7 +1742,12 @@ const runTriageReview = (rest: ReadonlyArray<string>): Effect.Effect<number, str
       detail: clip(redact(stripFencedCode(finding.detail))),
     }));
     const result = yield* client
-      .ask({ harness, state: { findings: sanitized }, questions: reviewQuestions(sanitized) })
+      .ask({
+        harness,
+        state: { findings: sanitized },
+        questions: reviewQuestions(sanitized),
+        purpose: "review",
+      })
       .pipe(Effect.mapError(describeJevError));
     const routed = routeTriage(findings, result.answers);
     const now = yield* Clock.currentTimeMillis;
@@ -1587,6 +1804,7 @@ const transcriptFailureText = (
       harness,
       state: { candidates: maskedCandidates },
       questions: transcriptSelectionQuestions({ candidates: maskedCandidates }),
+      purpose: "triage",
     }).pipe(Effect.mapError(describeJevError));
     const index = choiceOf(selection.answers, "failure_index").pipe(
       Option.map((answer) => Number.parseInt(answer.choice.replace("candidate_", ""), 10)),
@@ -1652,6 +1870,7 @@ const canonicalFailureFingerprint = (
         })),
       },
       questions: identityQuestions({ current: safeFailure.slice(0, 600), recent: similar }),
+      purpose: "triage",
     }).pipe(Effect.mapError(describeJevError));
     const answer = choiceOf(selection.answers, "same_as").pipe(
       Option.map((same) => Number.parseInt(same.choice.replace("recent_", ""), 10)),
@@ -1746,6 +1965,7 @@ const runTriageFailure = (
           source: selection.value.source,
           repeats: loop.count,
         }),
+        purpose: "triage",
       })
       .pipe(Effect.mapError(describeJevError));
     yield* reportFailure(log, harness, canonical, loop, result);

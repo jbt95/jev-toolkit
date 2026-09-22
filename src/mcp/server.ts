@@ -354,6 +354,7 @@ const askTool = (config: McpConfig): McpTool => ({
         questions: payload.questions,
         model: Option.getOrUndefined(Option.fromNullishOr(payload.model)),
         sessionID: payload.sessionID,
+        purpose: "ask",
       });
     }),
 });
@@ -394,6 +395,7 @@ const verifyTool = (config: McpConfig): McpTool => ({
         },
         questions: evidenceQuestions(input),
         sessionID: payload.sessionID,
+        purpose: "verify",
       } satisfies AskInput;
       return askForTool(config, askInput, async (result) => {
         const verdicts = claimVerdicts(result.answers, input);
@@ -460,6 +462,7 @@ const reviewTool = (config: McpConfig): McpTool => ({
         state: input,
         questions: reviewQuestions(input),
         sessionID: payload.sessionID,
+        purpose: "review",
       } satisfies AskInput;
       return askForTool(config, askInput, async (result) => {
         const evaluation = evaluateReview(input, result.answers);
@@ -541,6 +544,7 @@ const skillRouteTool = (config: McpConfig): McpTool => ({
         },
         questions: skillRouteQuestions(input),
         sessionID: payload.sessionID,
+        purpose: "route",
       } satisfies AskInput;
       return askForTool(config, askInput, async (result) => {
         const route = skillRoute(input, result.answers);

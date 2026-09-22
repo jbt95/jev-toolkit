@@ -26,6 +26,30 @@ describe("EventLog", () => {
     expect(events[0]?._tag).toBe("call");
   });
 
+  it("round-trips an objective checkpoint event", async () => {
+    const log = makeEventLog(await tempLogPath());
+    await Effect.runPromise(
+      log.append({
+        _tag: "checkpoint",
+        ts: "2026-09-16T00:00:00.000Z",
+        harness: "cli",
+        sessionID: "session-1",
+        kind: "test",
+        result: "pass",
+        source: "ci",
+      }),
+    );
+    const events = await Effect.runPromise(log.read());
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      _tag: "checkpoint",
+      sessionID: "session-1",
+      kind: "test",
+      result: "pass",
+      source: "ci",
+    });
+  });
+
   it("skips malformed lines and tolerates a missing file", async () => {
     const missing = makeEventLog(await tempLogPath());
     expect(await Effect.runPromise(missing.read())).toHaveLength(0);

@@ -115,6 +115,112 @@ describe("jev CLI surface", () => {
     );
     expect(call?.sessionID).toBe("ses_attr");
     expect(call?.harness).toBe("cli");
+    expect(call?.purpose).toBe("ask");
+    expect(call?.callID).toEqual(expect.any(String));
+  });
+
+  it("records an objective checkpoint", async () => {
+    const path = await tempEventsPath();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const code = await Effect.runPromise(
+      runCli(
+        [
+          "checkpoint",
+          "--kind",
+          "test",
+          "--result",
+          "pass",
+          "--source",
+          "ci",
+          "--session",
+          "session-1",
+        ],
+        cliLayers(path, respond),
+      ),
+    );
+
+    expect(code).toBe(0);
+    expect(String(logSpy.mock.calls[0]?.[0])).toContain("checkpoint recorded");
+    const checkpoint = (await Effect.runPromise(makeEventLog(path).read())).find(
+      (event) => event._tag === "checkpoint",
+    );
+    expect(checkpoint).toMatchObject({
+      harness: "cli",
+      sessionID: "session-1",
+      kind: "test",
+      result: "pass",
+      source: "ci",
+    });
+  });
+
+  it("rejects an invalid objective checkpoint", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const code = await Effect.runPromise(
+      runCli(
+        ["checkpoint", "--kind", "deploy", "--result", "pass"],
+        cliLayers(await tempEventsPath(), respond),
+      ),
+    );
+
+    expect(code).toBe(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("usage: jev checkpoint");
+  });
+
+  it("records correction and cohort observations without raw content", async () => {
+    const path = await tempEventsPath();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const layers = cliLayers(path, respond);
+
+    expect(
+      await Effect.runPromise(
+        runCli(
+          [
+            "correction",
+            "--kind",
+            "accepted",
+            "--source",
+            "operator",
+            "--session",
+            "session-1",
+            "--call-id",
+            "call-1",
+          ],
+          layers,
+        ),
+      ),
+    ).toBe(0);
+    expect(
+      await Effect.runPromise(
+        runCli(
+          ["cohort", "--name", "holdout", "--source", "experiment", "--session", "session-1"],
+          layers,
+        ),
+      ),
+    ).toBe(0);
+
+    const events = await Effect.runPromise(makeEventLog(path).read());
+    expect(events).toEqual([
+      {
+        _tag: "correction",
+        harness: "cli",
+        sessionID: "session-1",
+        callID: "call-1",
+        kind: "accepted",
+        source: "operator",
+        ts: expect.any(String),
+      },
+      {
+        _tag: "cohort",
+        harness: "cli",
+        sessionID: "session-1",
+        cohort: "holdout",
+        source: "experiment",
+        ts: expect.any(String),
+      },
+    ]);
+    expect(logSpy).toHaveBeenCalledTimes(2);
   });
 
   it("rejects unknown hook and meter subcommands", async () => {

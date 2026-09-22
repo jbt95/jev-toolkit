@@ -19,10 +19,23 @@ describe("jev impact", () => {
         ts: now,
         harness: "opencode",
         sessionID: "assisted",
+        callID: "call-secret",
         model: "jev-test",
         latencyMs: 10,
         status: "ok",
         questions: [{ id: "q1", type: "choice" }],
+      }),
+    );
+    await Effect.runPromise(
+      log.append({
+        _tag: "checkpoint",
+        ts: now,
+        harness: "opencode",
+        sessionID: "assisted",
+        callID: "call-secret",
+        kind: "test",
+        result: "pass",
+        source: "ci",
       }),
     );
     await Effect.runPromise(
@@ -72,5 +85,7 @@ describe("jev impact", () => {
       assisted: { sessions: 1, outcomes: { shipped: 1 } },
       unassisted: { sessions: 1, outcomes: { blocked: 1 } },
     });
+    expect(String(logSpy.mock.calls[0]?.[0])).not.toContain("call-secret");
+    expect(String(logSpy.mock.calls[0]?.[0])).not.toContain('"sessionID"');
   });
 });

@@ -1,7 +1,16 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import { randomUUID } from "node:crypto";
 import type { EventLogService } from "./events.ts";
-import type { AnswerMap, CallEvent, Harness, JevErrorTag, QuestionMap } from "./schema.ts";
+import type {
+  AnswerMap,
+  CallEvent,
+  CallPurpose,
+  Harness,
+  JevErrorTag,
+  QuestionMap,
+  StateSizeBucket,
+} from "./schema.ts";
 
 /** Fields every call event carries besides the request identity. */
 export interface CallLogFields {
@@ -20,7 +29,30 @@ export interface CallIdentity {
   readonly harness: Harness;
   readonly sessionID?: string | undefined;
   readonly questions: QuestionMap;
+  readonly callID: string;
+  readonly purpose: CallPurpose;
+  readonly stateSizeBucket: StateSizeBucket;
 }
+
+/** Input identity fields; the bucket is required so legacy gaps stay visible. */
+export interface CallIdentityInput {
+  readonly harness: Harness;
+  readonly sessionID?: string | undefined;
+  readonly questions: QuestionMap;
+  readonly stateSizeBucket: StateSizeBucket;
+  readonly callID?: string | undefined;
+  readonly purpose?: CallPurpose | undefined;
+}
+
+/** Generate the local opaque identity once per ask, before any transport path. */
+export const callIdentityFor = (input: CallIdentityInput): CallIdentity => ({
+  harness: input.harness,
+  sessionID: input.sessionID,
+  questions: input.questions,
+  callID: input.callID ?? randomUUID(),
+  purpose: input.purpose ?? "ask",
+  stateSizeBucket: input.stateSizeBucket,
+});
 
 /** Question ids and types only: prompts, criteria, and answers stay out. */
 export const summarizeQuestions = (
@@ -47,6 +79,9 @@ export const callLogger =
         _tag: "call",
         ts: new Date(now).toISOString(),
         harness: input.harness,
+        callID: input.callID,
+        purpose: input.purpose,
+        stateSizeBucket: input.stateSizeBucket,
         model: fields.model,
         latencyMs: fields.latencyMs,
         status: fields.status,

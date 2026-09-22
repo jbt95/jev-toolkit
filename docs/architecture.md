@@ -87,7 +87,7 @@ these as text, never guesses.
 | `core/text.ts` | — | `redact` (credentials), `clip`, `stripFencedCode` (prose-only state) |
 | `core/transcript.ts` | — | Claude transcript parsing: `is_error` tool results, newest first |
 | `core/directives.ts` | — | The prompt directive and context policy strings shared by every harness |
-| `core/impact.ts` | — | Pure cohort aggregation: assisted vs unassisted labeled sessions by harness and task type |
+| `core/impact.ts` | — | Pure joined impact aggregation: funnel, calibration, timeline, overhead, corrections, and cohorts |
 | `core/doctor.ts` | — | Local health checks: `collectDoctorFacts` probes the log, meter, and session stores; `buildDoctorReport` is pure |
 | `core/paths.ts` | — | Data dir, event log, loop state, harness session roots, API endpoint |
 
@@ -97,15 +97,18 @@ All services follow the repo conventions: class-style `Context.Service`,
 
 ## Event log
 
-One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Seven kinds,
+One JSONL file (`JEV_DATA_DIR`, default `~/.local/share/jev`). Eleven kinds,
 all validated by `src/core/schema.ts`:
 
 | Kind | Fields (abridged) | Written by |
 |---|---|---|
-| `call` | harness, sessionID, model, latencyMs, status, questions (id+type), answers, tokens, error?, errorTag? | JevClient on every ask |
+| `call` | harness, sessionID, callID?, purpose?, model, latencyMs, status, questions (id+type), answers, tokens, error?, errorTag? | JevClient on every ask |
 | `opportunity` | harness, sessionID, source, pattern, matched, messageTs? | `audit run` |
 | `triage` | harness, feature (failure/review/commit/verify), numeric summary | triage commands, `typesafe_verify` |
-| `session_label` | harness, sessionID, outcome, friction, waste, taskType, costUsd?, tokens?, toolErrors?, stopReasons?, parentSessionID? | `label sessions` |
+| `session_label` | harness, sessionID, outcome, friction, waste, taskType, costUsd?, tokens?, toolErrors?, stopReasons?, timing? | `label sessions` |
+| `checkpoint` | harness, sessionID?, callID?, kind, result, source | `jev checkpoint` |
+| `correction` | harness, sessionID?, callID?, kind, source | `jev correction` |
+| `cohort` | harness, sessionID, cohort, source | `jev cohort` |
 | `review` | harness, sessionID, model, dimensions (normalized score, confidence, applicable, direction?), topWeakness? | `typesafe_review` |
 | `attribution` | harness, sessionID | `audit run`, once per recovered call→session link |
 | `route` | harness, outcome (routed/none), reason?, skill?, candidates, confidence, dependence | `typesafe_skill_route`, `jev route skills` |
@@ -122,6 +125,7 @@ flowchart LR
     AR["audit run"]
     TR["triage · check"]
     LS["label sessions"]
+    CP["checkpoint · correction · cohort"]
   end
   LOG[("events.jsonl")]
   subgraph consumers["Consumers"]
@@ -129,19 +133,26 @@ flowchart LR
     DASH["Grafana"]
     CLI["jev events"]
     AUD["audit alignment<br/>(call questions per session)"]
+    IMP["impact report<br/>(joined funnel)"]
   end
   JC --> LOG
   AR --> LOG
   TR --> LOG
   LS --> LOG
+  CP --> LOG
   LOG --> METER --> DASH
   LOG --> CLI
   LOG --> AUD
+  LOG --> IMP
 ```
 
-Event content is summaries, counts, and answers only. Raw code, transcripts,
+Event content is summaries, counts, answers, and opaque ids only. Raw code, transcripts,
 and secrets never enter the log, and `triage` events carry numeric summaries
 only (`Schema.Record(Schema.String, Schema.Number)`).
+
+Objective checkpoint telemetry and the joined impact report are implemented
+through `jev checkpoint` and `jev impact`; see [`telemetry.md`](telemetry.md)
+for the privacy boundaries and measurement semantics.
 
 ## Judgment pattern: question pack → answers → code policy
 

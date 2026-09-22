@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { readFile } from "node:fs/promises";
 import { describeJevError, type AskResult, type JevError, type JevState } from "../core/client.ts";
-import type { AnswerMap, Harness, QuestionMap } from "../core/schema.ts";
+import type { AnswerMap, CallPurpose, Harness, QuestionMap } from "../core/schema.ts";
 import {
   ReviewInput as ReviewerInput,
   reviewQuestions as reviewerQuestions,
@@ -28,6 +28,7 @@ export type PackAsk = (input: {
   readonly state: JevState;
   readonly questions: QuestionMap;
   readonly model?: string;
+  readonly purpose?: CallPurpose;
 }) => Effect.Effect<AskResult, JevError>;
 
 const EvalCase = Schema.Struct({
@@ -194,6 +195,7 @@ const runCase = (
       state: prepared.state,
       questions: prepared.questions,
       model: modelArg,
+      purpose: "eval",
     }).pipe(Effect.mapError((error) => describeJevError(error)));
     const latencyMs = (yield* Clock.currentTimeMillis) - started;
     return {

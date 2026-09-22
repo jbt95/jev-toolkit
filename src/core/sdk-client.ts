@@ -34,12 +34,13 @@ import {
   answersCoverQuestions,
   describeJevError,
   requireApiKey,
+  stateSizeBucketOf,
   type AskInput,
   type AskResult,
   type JevClientService,
   type JevError,
 } from "./client.ts";
-import { callLogger } from "./call-log.ts";
+import { callIdentityFor, callLogger } from "./call-log.ts";
 import { EventLog, type EventLogService } from "./events.ts";
 import type { AnswerMap, QuestionMap } from "./schema.ts";
 
@@ -154,12 +155,16 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
     Effect.gen(function* askProgram() {
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
+      const identity = callIdentityFor({
+        ...input,
+        stateSizeBucket: stateSizeBucketOf(input.state),
+      });
 
-      yield* requireApiKey(apiKey, logCall, input, model);
+      yield* requireApiKey(apiKey, logCall, identity, model);
 
       const converted = toSdkQuestions(input.questions);
       if (Option.isNone(converted)) {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs: 0,
           model,
@@ -184,7 +189,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
         }),
       );
       if (built._tag === "Failure") {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs: 0,
           model,
@@ -207,7 +212,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
       const latencyMs = (yield* Clock.currentTimeMillis) - started;
 
       if (outcome._tag === "Failure") {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs,
           model,
@@ -220,7 +225,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
 
       const answers = toInternalAnswers(response.answers);
       if (!answersCoverQuestions(input.questions, answers)) {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs,
           model,
@@ -237,7 +242,7 @@ export function makeSdkJevClient(config: SdkClientConfig): JevClientService {
           output: response.usage.output_tokens,
         },
       };
-      yield* logCall(input, {
+      yield* logCall(identity, {
         status: "ok",
         latencyMs,
         model: result.model,

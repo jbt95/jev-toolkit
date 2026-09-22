@@ -5,9 +5,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { callLogger, type CallLogger } from "./call-log.ts";
+import { callIdentityFor, callLogger, type CallIdentity, type CallLogger } from "./call-log.ts";
 import { EventLog, type EventLogService } from "./events.ts";
-import type { Answer, AnswerMap, Harness, Question, QuestionMap } from "./schema.ts";
+import type {
+  Answer,
+  AnswerMap,
+  CallPurpose,
+  Harness,
+  Question,
+  QuestionMap,
+  StateSizeBucket,
+} from "./schema.ts";
 
 export const DEFAULT_MODEL = "jev-latest";
 const TIMEOUT = "120 seconds";
@@ -29,6 +37,15 @@ export type JevError =
 
 /** Anything JSON-shaped may be judged: text or structured state. */
 export type JevState = Schema.Schema.Type<typeof Schema.Json>;
+
+/** Bucket serialized state size without retaining the state itself. */
+export const stateSizeBucketOf = (state: JevState): StateSizeBucket => {
+  const size = JSON.stringify(state).length;
+  if (size < 1_000) return "0_1k";
+  if (size < 10_000) return "1k_10k";
+  if (size < 50_000) return "10k_50k";
+  return "50k_plus";
+};
 
 export type JevTransportFailure = JevTransportError | JevApiError | JevTimeoutError;
 
@@ -200,6 +217,10 @@ export interface AskInput {
   readonly questions: QuestionMap;
   readonly model?: string;
   readonly sessionID?: string;
+  /** Optional caller-supplied opaque id; otherwise one is generated locally. */
+  readonly callID?: string;
+  /** Closed semantic purpose; omitted callers are generic `ask`s. */
+  readonly purpose?: CallPurpose;
 }
 
 export interface AskResult {
@@ -227,7 +248,7 @@ export const MISSING_API_KEY =
 export const requireApiKey = (
   apiKey: Option.Option<string>,
   logCall: CallLogger,
-  input: AskInput,
+  input: CallIdentity,
   model: string,
 ): Effect.Effect<void, JevConfigError> =>
   Option.isSome(apiKey)
@@ -254,8 +275,12 @@ export function makeJevClient(
     Effect.gen(function* askProgram() {
       const started = yield* Clock.currentTimeMillis;
       const model = input.model ?? DEFAULT_MODEL;
+      const identity = callIdentityFor({
+        ...input,
+        stateSizeBucket: stateSizeBucketOf(input.state),
+      });
 
-      yield* requireApiKey(apiKey, logCall, input, model);
+      yield* requireApiKey(apiKey, logCall, identity, model);
 
       const body = JSON.stringify({
         state: input.state,
@@ -268,7 +293,7 @@ export function makeJevClient(
       const latencyMs = (yield* Clock.currentTimeMillis) - started;
 
       if (outcome._tag === "Failure") {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs,
           model,
@@ -280,7 +305,7 @@ export function makeJevClient(
 
       const decoded = yield* Effect.result(decodeResponse(outcome.success));
       if (decoded._tag === "Failure") {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs,
           model,
@@ -294,7 +319,7 @@ export function makeJevClient(
         Object.entries(decoded.success.answers).map(([id, answer]) => [id, toAnswer(answer)]),
       );
       if (!answersCoverQuestions(input.questions, answers)) {
-        yield* logCall(input, {
+        yield* logCall(identity, {
           status: "error",
           latencyMs,
           model,
@@ -311,7 +336,7 @@ export function makeJevClient(
           output: decoded.success.usage.output_tokens,
         },
       };
-      yield* logCall(input, {
+      yield* logCall(identity, {
         status: "ok",
         latencyMs,
         model: result.model,
