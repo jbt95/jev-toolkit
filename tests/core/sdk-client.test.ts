@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -10,7 +10,7 @@ import {
   type Fetch,
 } from "@typesafe-ai/sdk";
 import type { AskInput } from "@/core/client.ts";
-import type { Question } from "@/core/schema.ts";
+import type { JevErrorTag, Question } from "@/core/schema.ts";
 import { makeEventLog } from "@/core/events.ts";
 import { makeSdkJevClient, mapSdkFailure, sdkBaseURL } from "@/core/sdk-client.ts";
 import { tempEventsPath } from "../helpers.ts";
@@ -285,7 +285,7 @@ describe("noul criteria over the wire", () => {
 describe("mapSdkFailure", () => {
   it("maps every SDK failure class to its Jev error tag", () => {
     const headers = new Headers();
-    const cases: ReadonlyArray<readonly [unknown, string]> = [
+    const cases: ReadonlyArray<readonly [unknown, JevErrorTag]> = [
       [new APIError(500, "boom", headers), "JevApiError"],
       [new APITimeoutError(1000), "JevTimeoutError"],
       [new APIConnectionError("closed"), "JevTransportError"],

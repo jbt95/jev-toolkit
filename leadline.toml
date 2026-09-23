@@ -1,25 +1,13 @@
-# Leadline configuration for jev-toolkit.
-#
-# Scope: product code under src/, its tests, and the harness integrations.
-# tools/oxlint holds the anti-slop rule code, covered by its own rule tests;
-# it would otherwise dominate every complexity and CRAP list, so it stays out
-# of analysis scope.
+# Leadline configuration for the small Jev ask/verify toolkit.
 
 [analysis]
 exclude = ["tools/**", "coverage/**"]
 
-# No absolute CRAP limit: coverage covers src/** only, and a CRAP gate fails
-# every function whose CRAP is unknown, which would flag the whole test tree.
-# CRAP stays in [regressions], where paired src functions have coverage.
 [thresholds.function]
 cognitive = 20
 cyclomatic = 15
 max_nesting = 5
 
-# Anonymous functions pair by name, and the name embeds the line; an edit that
-# shifts lines can pair two different bodies. The cognitive and nesting limits
-# still catch real growth on named functions; cyclomatic and CRAP carry the
-# pairing artifact.
 [regressions]
 cognitive = 2
 cyclomatic = 2
@@ -30,47 +18,8 @@ crap = 3.0
 min_tokens = 100
 min_lines = 10
 
-# Layering: the modules below form the toolkit's spine. Each rule pins an
-# invariant the code already holds, so a future import that breaks it fails
-# the policy gate instead of shipping.
-
 [[architecture.rules]]
-name = "core-stays-harness-agnostic"
+name = "core-does-not-depend-on-surfaces"
 source = "src/core/**"
-deny = [
-  "src/audit/**",
-  "src/cli/**",
-  "src/eval/**",
-  "src/mcp/**",
-  "src/question-packs/**",
-  "src/replay/**",
-]
-severity = "error"
-
-[[architecture.rules]]
-name = "question-packs-do-not-drive-surfaces"
-source = "src/question-packs/**"
-deny = ["src/cli/**", "src/eval/**", "src/mcp/**", "src/replay/**"]
-severity = "error"
-
-[[architecture.rules]]
-name = "audit-reads-the-log-not-the-cli"
-source = "src/audit/**"
 deny = ["src/cli/**", "src/mcp/**"]
-severity = "error"
-
-# Harness loaders resolve imports lexically against a linked path, so an
-# integration that imports src/ fails to load inside pi/omp/opencode.
-[[architecture.rules]]
-name = "integrations-are-self-contained"
-source = "integrations/**"
-deny = [
-  "src/audit/**",
-  "src/cli/**",
-  "src/core/**",
-  "src/eval/**",
-  "src/mcp/**",
-  "src/question-packs/**",
-  "src/replay/**",
-]
 severity = "error"

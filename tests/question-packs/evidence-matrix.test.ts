@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import type { AnswerMap } from "@/core/schema.ts";
 import {
   VERDICT_CONFIDENCE_FLOOR,

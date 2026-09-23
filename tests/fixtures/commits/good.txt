@@ -1,5 +1,0 @@
-feat(parser): reject mixed-indentation blocks
-
-Mixed tabs and spaces made column math wrong, so blocks now fail
-parsing with a clear error instead of computing wrong offsets.
-Covered by parser tests.

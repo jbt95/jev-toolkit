@@ -1,9 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import {
   JevApiError,
   JevClient,
@@ -13,7 +11,7 @@ import {
   type AskInput,
 } from "@/core/client.ts";
 import { EventLogLive, makeEventLog } from "@/core/events.ts";
-import { makeTestTransport, tempEventsPath } from "../helpers.ts";
+import { makeTestTransport, startFakeApi, tempEventsPath } from "../helpers.ts";
 
 const cannedSuccess = JSON.stringify({
   model: "jev-1.13.0",
@@ -82,13 +80,13 @@ describe("JevClient", () => {
     });
 
     await Effect.runPromise(
-      client.ask({ ...sampleInput, callID: "call-local-1", purpose: "claim_detection" }),
+      client.ask({ ...sampleInput, callID: "call-local-1", purpose: "verify" }),
     );
 
     const event = (await Effect.runPromise(makeEventLog(path).read())).find(
       (entry) => entry._tag === "call",
     );
-    expect(event).toMatchObject({ callID: "call-local-1", purpose: "claim_detection" });
+    expect(event).toMatchObject({ callID: "call-local-1", purpose: "verify" });
   });
 
   it("logs an error event and fails with JevApiError on HTTP failure", async () => {
@@ -244,26 +242,19 @@ describe("JevClient", () => {
   });
 
   it("makeFetchTransport reads a real HTTP response from a local server", async () => {
-    const server = createServer((_request, response) => {
-      response.statusCode = 200;
-      response.end(cannedSuccess);
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    // SAFETY: a TCP server listening on 127.0.0.1 always reports an AddressInfo.
-    const { port } = address as AddressInfo;
+    const api = await startFakeApi(() => cannedSuccess);
     try {
       const log = makeEventLog(await tempEventsPath());
       const client = makeJevClient({
         apiKey: Option.some("test-key"),
-        transport: createFetchTransport(`http://127.0.0.1:${port}/v1/systemone`, "test-key"),
+        transport: createFetchTransport(api.url, "test-key"),
         log,
       });
       const result = await Effect.runPromise(client.ask(sampleInput));
       expect(result.model).toBe("jev-1.13.0");
       expect(result.answers["is_dupe"]?._tag).toBe("noul");
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await api.close();
     }
   });
 

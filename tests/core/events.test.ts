@@ -1,53 +1,47 @@
-import { describe, expect, it } from "vitest";
-import { appendFile, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "bun:test";
 import * as Effect from "effect/Effect";
 import { makeEventLog } from "@/core/events.ts";
+import { appendText, joinPath, tempDir } from "../helpers.ts";
 
-const tempLogPath = async () => join(await mkdtemp(join(tmpdir(), "jev-test-")), "events.jsonl");
+const tempLogPath = async () => joinPath(await tempDir(), "events.jsonl");
+
+const callEvent = (harness: string) => ({
+  _tag: "call",
+  ts: "2026-09-16T00:00:00.000Z",
+  harness,
+  model: "jev-test",
+  latencyMs: 10,
+  status: "ok",
+  questions: [{ id: "q1", type: "noul" }],
+});
 
 describe("EventLog", () => {
-  it("round-trips a call event", async () => {
+  it("round-trips ask calls and verify summaries", async () => {
     const log = makeEventLog(await tempLogPath());
     await Effect.runPromise(
       log.append({
         _tag: "call",
         ts: "2026-09-16T00:00:00.000Z",
         harness: "cli",
+        purpose: "ask",
         model: "jev-latest",
         latencyMs: 120,
         status: "ok",
         questions: [{ id: "q1", type: "noul" }],
       }),
     );
-    const events = await Effect.runPromise(log.read());
-    expect(events).toHaveLength(1);
-    expect(events[0]?._tag).toBe("call");
-  });
-
-  it("round-trips an objective checkpoint event", async () => {
-    const log = makeEventLog(await tempLogPath());
     await Effect.runPromise(
       log.append({
-        _tag: "checkpoint",
-        ts: "2026-09-16T00:00:00.000Z",
+        _tag: "verify",
+        ts: "2026-09-16T00:00:01.000Z",
         harness: "cli",
-        sessionID: "session-1",
-        kind: "test",
-        result: "pass",
-        source: "ci",
+        summary: { claims: 1, supported: 1, contradicted: 0 },
       }),
     );
     const events = await Effect.runPromise(log.read());
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      _tag: "checkpoint",
-      sessionID: "session-1",
-      kind: "test",
-      result: "pass",
-      source: "ci",
-    });
+    expect(events).toHaveLength(2);
+    expect(events[0]?._tag).toBe("call");
+    expect(events[1]).toMatchObject({ _tag: "verify", summary: { claims: 1 } });
   });
 
   it("skips malformed lines and tolerates a missing file", async () => {
@@ -55,76 +49,40 @@ describe("EventLog", () => {
     expect(await Effect.runPromise(missing.read())).toHaveLength(0);
 
     const path = await tempLogPath();
-    await appendFile(path, "not json\n");
-    const log = makeEventLog(path);
-    expect(await Effect.runPromise(log.read())).toHaveLength(0);
+    await appendText(path, `${JSON.stringify(callEvent("cli"))}\nnot json\n`);
+    expect(await Effect.runPromise(makeEventLog(path).read())).toHaveLength(1);
   });
 
   it("decodes the pre-rename opencode2 harness tag as opencode", async () => {
     const path = await tempLogPath();
-    await appendFile(
-      path,
-      `${JSON.stringify({
-        _tag: "call",
-        ts: "2026-09-16T00:00:00.000Z",
-        harness: "opencode2",
-        model: "jev-1.13.0",
-        latencyMs: 10,
-        status: "ok",
-        questions: [{ id: "q1", type: "noul" }],
-      })}\n`,
-    );
-    const log = makeEventLog(path);
-    const events = await Effect.runPromise(log.read());
+    await appendText(path, `${JSON.stringify(callEvent("opencode2"))}\n`);
+    const events = await Effect.runPromise(makeEventLog(path).read());
     expect(events).toHaveLength(1);
     expect(events[0]?.harness).toBe("opencode");
   });
 
-  it("reports log health: decoded, skipped, and newest timestamp", async () => {
+  it("preserves legacy event kinds and call purposes as archived records", async () => {
     const path = await tempLogPath();
-    await appendFile(
-      path,
-      `${JSON.stringify({
-        _tag: "call",
-        ts: "2026-09-16T00:00:00.000Z",
-        harness: "cli",
-        model: "jev-1.13.0",
-        latencyMs: 10,
-        status: "ok",
-        questions: [{ id: "q1", type: "noul" }],
-      })}\nnot json\n`,
-    );
-    await appendFile(
-      path,
-      `${JSON.stringify({
-        _tag: "call",
-        ts: "2026-09-17T00:00:00.000Z",
-        harness: "cli",
-        model: "jev-1.13.0",
-        latencyMs: 10,
-        status: "ok",
-        questions: [{ id: "q1", type: "noul" }],
-      })}\n`,
-    );
-    const log = makeEventLog(path);
+    const legacyCall = { ...callEvent("cli"), purpose: "review" };
+    const legacyTriage = {
+      _tag: "triage",
+      ts: "2026-09-16T00:00:01.000Z",
+      harness: "pi",
+      feature: "verify",
+      summary: { claims: 1, supported: 1 },
+    };
+    await appendText(path, `${JSON.stringify(legacyCall)}\n${JSON.stringify(legacyTriage)}\n`);
 
-    const scan = await Effect.runPromise(log.scan());
+    const events = await Effect.runPromise(makeEventLog(path).read());
 
-    expect(scan.events).toHaveLength(2);
-    expect(scan.stats).toEqual({
-      lines: 3,
-      decoded: 2,
-      skipped: 1,
-      lastEventTs: "2026-09-17T00:00:00.000Z",
-    });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ _tag: "legacy", kind: "call", record: legacyCall });
+    expect(events[1]).toMatchObject({ _tag: "legacy", kind: "triage", record: legacyTriage });
   });
 
   it("propagates non-ENOENT read failures", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "jev-test-"));
-    const log = makeEventLog(dir); // a directory cannot be read as an event log
-
-    const outcome = await Effect.runPromise(Effect.result(log.read()));
-
+    const dir = await tempDir();
+    const outcome = await Effect.runPromise(Effect.result(makeEventLog(dir).read()));
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("EventLogError");
   });

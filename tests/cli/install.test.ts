@@ -1,118 +1,165 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as Effect from "effect/Effect";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { runCli } from "@/cli/jev.ts";
-import { apiResponse, cliLayers, tempDir, tempEventsPath } from "../helpers.ts";
+import { installHarness, type InstallRuntime } from "@/cli/install.ts";
+import { joinPath, makeDirectory, readText, removeTree, tempDir, writeText } from "../helpers.ts";
 
-afterEach(() => {
-  delete process.env.XDG_CONFIG_HOME;
-  vi.restoreAllMocks();
+const homes: Array<string> = [];
+
+const runtimeFor = (
+  homeDir: string,
+  installPiAdapter: InstallRuntime["installPiAdapter"] = () => Effect.succeed(undefined),
+  installClaudeMcp: InstallRuntime["installClaudeMcp"] = () => Effect.succeed(undefined),
+): InstallRuntime => ({
+  homeDir,
+  bunPath: "/usr/bin/bun",
+  cliEntry: "/work/jev-toolkit/src/cli/jev.ts",
+  installPiAdapter,
+  installClaudeMcp,
 });
 
-describe("jev install", () => {
-  it("installs the OpenCode files and preserves config entries idempotently", async () => {
-    const root = await tempDir();
-    const configHome = join(root, "config");
-    const opencodeDir = join(configHome, "opencode");
-    await mkdir(opencodeDir, { recursive: true });
-    await writeFile(
-      join(opencodeDir, "opencode.json"),
-      JSON.stringify({
-        model: "test/model",
-        plugins: ["other-plugin", { package: "configured-plugin", options: { enabled: true } }],
-        instructions: ["AGENTS.md"],
-      }),
-    );
-    process.env.XDG_CONFIG_HOME = configHome;
-    const logPath = await tempEventsPath();
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(homes.splice(0).map(removeTree));
+});
 
-    const first = await Effect.runPromise(
-      runCli(
-        ["install", "opencode"],
-        cliLayers(logPath, () => apiResponse({})),
-      ),
-    );
-    const second = await Effect.runPromise(
-      runCli(
-        ["install", "opencode"],
-        cliLayers(logPath, () => apiResponse({})),
-      ),
-    );
+describe("harness install", () => {
+  it("writes OpenCode's user-level stdio config and harness tag", async () => {
+    const home = await tempDir();
+    homes.push(home);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    expect(first).toBe(0);
-    expect(second).toBe(0);
-    const config = await readFile(join(opencodeDir, "opencode.json"), "utf8");
-    expect(config).toContain('"model": "test/model"');
-    expect(config.match(/\.\/plugins\/jev\/index\.ts/g)).toHaveLength(1);
-    expect(config.match(/instructions\/jev-routing\.md/g)).toHaveLength(1);
-    expect(await readFile(join(opencodeDir, "plugins", "jev", "index.ts"), "utf8")).toContain(
-      "typesafe_skill_route",
-    );
-    expect(await readFile(join(opencodeDir, "instructions", "jev-routing.md"), "utf8")).toContain(
-      "typesafe_skill_route",
-    );
+    const code = await Effect.runPromise(installHarness("opencode", runtimeFor(home)));
+    const config = await readText(joinPath(home, ".config", "opencode", "opencode.json"));
+
+    expect(code).toBe(0);
+    expect(JSON.parse(config)).toEqual({
+      mcp: {
+        "jev-toolkit": {
+          type: "local",
+          command: ["/usr/bin/bun", "/work/jev-toolkit/src/cli/jev.ts", "mcp"],
+          environment: { JEV_HARNESS: "opencode" },
+        },
+      },
+    });
+    expect(logSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("does not overwrite a custom managed file without --force", async () => {
-    const root = await tempDir();
-    const configHome = join(root, "config");
-    const pluginDir = join(configHome, "opencode", "plugins", "jev");
-    await mkdir(pluginDir, { recursive: true });
-    await writeFile(join(pluginDir, "index.ts"), "// custom plugin\n");
-    process.env.XDG_CONFIG_HOME = configHome;
-    const logPath = await tempEventsPath();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("preserves unrelated OpenCode JSONC settings and updates its entry idempotently", async () => {
+    const home = await tempDir();
+    homes.push(home);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const path = joinPath(home, ".config", "opencode", "opencode.json");
+    const existing = `{
+  // user preference
+  "theme": "dark",
+  /* block comment */
+  "label": "literal // and /* comment markers */",
+  "mcp": {
+    // another server
+    "other": { "type": "local", "command": ["echo"] },
+  },
+}`;
+    await makeDirectory(joinPath(home, ".config", "opencode"));
+    await writeText(path, existing);
 
-    const refused = await Effect.runPromise(
-      runCli(
-        ["install", "opencode"],
-        cliLayers(logPath, () => apiResponse({})),
-      ),
-    );
-    const forced = await Effect.runPromise(
-      runCli(
-        ["install", "opencode", "--force"],
-        cliLayers(logPath, () => apiResponse({})),
-      ),
-    );
+    await Effect.runPromise(installHarness("opencode", runtimeFor(home)));
+    const firstInstall = await readText(path);
+    await Effect.runPromise(installHarness("opencode", runtimeFor(home)));
+    const secondInstall = await readText(path);
 
-    expect(refused).toBe(1);
-    expect(forced).toBe(0);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--force"));
-    expect(await readFile(join(pluginDir, "index.ts"), "utf8")).toContain("typesafe_skill_route");
+    expect(firstInstall).toContain("// user preference");
+    expect(firstInstall).toContain("// another server");
+    expect(firstInstall).toContain('"theme": "dark"');
+    expect(firstInstall).toContain("/* block comment */");
+    expect(firstInstall).toContain('"label": "literal // and /* comment markers */"');
+    expect(firstInstall).toContain('"other": { "type": "local", "command": ["echo"] }');
+    expect(firstInstall.match(/"jev-toolkit"/g)).toHaveLength(1);
+    expect(secondInstall).toBe(firstInstall);
   });
 
-  it("reads JSONC comments without changing comment-like strings", async () => {
-    const root = await tempDir();
-    const configHome = join(root, "config");
-    const opencodeDir = join(configHome, "opencode");
-    await mkdir(opencodeDir, { recursive: true });
-    await writeFile(
-      join(opencodeDir, "opencode.jsonc"),
-      `{
-        // A line comment.
-        "endpoint": "https://example.test/a//b",
-        "literal": "/* keep this text */",
-        "plugins": ["other-plugin",],
-        "instructions": ["AGENTS.md", /* A block comment. */],
-      }`,
-    );
-    process.env.XDG_CONFIG_HOME = configHome;
-    const logPath = await tempEventsPath();
+  it("installs the Pi adapter and writes the shared user-level MCP config", async () => {
+    const home = await tempDir();
+    homes.push(home);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const installPiAdapter = vi.fn(() => Effect.succeed(undefined));
+
+    await Effect.runPromise(installHarness("pi", runtimeFor(home, installPiAdapter)));
+    const config = await readText(joinPath(home, ".config", "mcp", "mcp.json"));
+
+    expect(installPiAdapter).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(config)).toEqual({
+      mcpServers: {
+        "jev-toolkit": {
+          command: "/usr/bin/bun",
+          args: ["/work/jev-toolkit/src/cli/jev.ts", "mcp"],
+          env: { JEV_HARNESS: "pi" },
+        },
+      },
+    });
+  });
+
+  it("writes OMP's user-level stdio config and updates it idempotently", async () => {
+    const home = await tempDir();
+    homes.push(home);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const path = joinPath(home, ".omp", "agent", "mcp.json");
+    await makeDirectory(joinPath(home, ".omp", "agent"));
+    await writeText(
+      path,
+      JSON.stringify({ mcpServers: { other: { type: "stdio", command: "echo" } } }),
+    );
+
+    await Effect.runPromise(installHarness("omp", runtimeFor(home)));
+    const firstInstall = await readText(path);
+    await Effect.runPromise(installHarness("omp", runtimeFor(home)));
+    const secondInstall = await readText(path);
+
+    expect(JSON.parse(firstInstall)).toEqual({
+      mcpServers: {
+        other: { type: "stdio", command: "echo" },
+        "jev-toolkit": {
+          type: "stdio",
+          command: "/usr/bin/bun",
+          args: ["/work/jev-toolkit/src/cli/jev.ts", "mcp"],
+          env: { JEV_HARNESS: "omp" },
+        },
+      },
+    });
+    expect(secondInstall).toBe(firstInstall);
+  });
+
+  it("delegates Claude Code registration to its user-scope installer", async () => {
+    const home = await tempDir();
+    homes.push(home);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const installClaudeMcp = vi.fn(() => Effect.succeed(undefined));
+
+    const code = await Effect.runPromise(
+      installHarness("claude-code", runtimeFor(home, undefined, installClaudeMcp)),
+    );
+
+    expect(code).toBe(0);
+    expect(installClaudeMcp).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not alter an invalid config or install the Pi adapter", async () => {
+    const home = await tempDir();
+    homes.push(home);
+    const path = joinPath(home, ".config", "mcp", "mcp.json");
+    const invalid = '{ "mcpServers": [ }';
+    await makeDirectory(joinPath(home, ".config", "mcp"));
+    await writeText(path, invalid);
+    const installPiAdapter = vi.fn(() => Effect.succeed(undefined));
 
     const result = await Effect.runPromise(
-      runCli(
-        ["install", "opencode"],
-        cliLayers(logPath, () => apiResponse({})),
-      ),
+      Effect.match(installHarness("pi", runtimeFor(home, installPiAdapter)), {
+        onFailure: (error) => `failure: ${error}`,
+        onSuccess: () => "success",
+      }),
     );
 
-    expect(result).toBe(0);
-    const config = JSON.parse(await readFile(join(opencodeDir, "opencode.jsonc"), "utf8"));
-    expect(config.endpoint).toBe("https://example.test/a//b");
-    expect(config.literal).toBe("/* keep this text */");
+    expect(result).toContain("invalid or incompatible MCP config");
+    expect(await readText(path)).toBe(invalid);
+    expect(installPiAdapter).not.toHaveBeenCalled();
   });
 });

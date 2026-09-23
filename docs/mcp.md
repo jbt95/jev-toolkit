@@ -1,235 +1,142 @@
 # MCP server (`jev mcp`)
 
-One stdio server. `typesafe_ask` is the generic judgment tool, and task-shaped
-tools may wrap the question packs under the tool-surface policy below. Every
-MCP-capable harness connects to the same process.
+The server exposes three judgment tools over stdio:
 
-The server keeps the strict stdio shape of a reference MCP server:
-version-echoing `initialize` (with an `instructions` field hosts inject),
-strict `tools/call` validation, and text-content results. stdout carries only
-JSON-RPC lines.
+- `typesafe_ask` — a focused typed judgment (`choice`, `noul`, or `score`).
+- `typesafe_rank` — order a caller-supplied shortlist by relevance to a query.
+- `typesafe_verify` — check claims against caller-supplied evidence.
 
-## Talk to it
+Use **ask** for a judgment or choice, **rank** to order explicit candidates,
+and **verify** to check claims against evidence. Ranking is not verification: a
+high relevance score does not establish that a candidate's claims are true.
+The initialize response advertises this routing policy; MCP hosts should pass
+server instructions and tool descriptions into the model context.
 
-```jsonc
-// Standard stdio server declaration; exact shape varies per client
-{
-  "mcpServers": {
-    "jev": {
-      "command": "jev",
-      "args": ["mcp"],
-      "env": { "JEV_HARNESS": "your-harness" }
-    }
-  }
-}
+## Install into a harness
+
+With Bun >= 1.3.14 installed, run `bun install` and `scripts/install.sh`, then run one of:
+
+```console
+jev install opencode
+jev install pi
+jev install omp
+jev install claude-code
 ```
 
-Any stdio MCP client works: `command: jev`, `args: ["mcp"]`. Set
-`JEV_HARNESS` so `call` events carry the right harness tag.
+- `jev install opencode` updates `~/.config/opencode/opencode.json` (`mcp`),
+  preserving other settings and JSONC comments.
+- `jev install pi` installs `pi-mcp-adapter` with
+  `pi install npm:pi-mcp-adapter`, then updates `~/.config/mcp/mcp.json`
+  (`mcpServers`). Pi and network access are required for the adapter install.
+- `jev install omp` updates `~/.omp/agent/mcp.json` (`mcpServers`) using OMP's
+  stdio server format.
+- `jev install claude-code` registers a user-scoped server with the `claude`
+  CLI. It replaces only an existing user-scoped `jev-toolkit` entry.
 
-## Protocol surface
+All targets launch the server from the current Jev checkout using Bun, set
+`JEV_HARNESS` appropriately, and preserve unrelated server entries. Rerun the
+command if you move the checkout. Restart clients that were already running.
+The installer never writes `TYPESAFE_API_KEY`; ensure the harness process passes
+that variable to the server. Other clients can configure `command: jev` and
+`args: ["mcp"]` manually. Valid `JEV_HARNESS` values are `opencode`,
+`claude-code`, `pi`, `omp`, `cli`, and `script`.
 
-| Method | Behavior |
-|---|---|
-| `initialize` | Echoes the client's `protocolVersion` (default `2024-11-05`), returns `capabilities.tools` and `instructions` = context policy + tool names |
-| `ping` | Empty result |
-| `tools/list` | The available judgment tools with their input schemas and annotations (`readOnlyHint: true`) |
-| `tools/call` | Validates `{ name, arguments }`, executes the named tool, returns text content |
-| `initialized`, `notifications/*` | Acknowledged, no response |
+## Protocol
 
-Errors: `-32700` parse, `-32600` invalid request, `-32601` unknown method,
-`-32602` invalid params or unknown tool. Tool execution failures are **not**
-JSON-RPC errors — they return `content` with `isError: true`, so the agent sees
-a readable message instead of a protocol fault.
+The server supports `initialize`, `ping`, `tools/list`, and `tools/call` over
+newline-delimited JSON-RPC 2.0. Notifications are acknowledged without a
+response. Tool failures are returned as text content with `isError: true`;
+malformed requests and unknown tools use JSON-RPC errors.
 
-## Request lifecycle
+Nested `questions`, `claims`, and `candidates` may be passed as their normal
+JSON value or as a JSON-encoded string, then are schema-validated either way.
 
-```mermaid
-sequenceDiagram
-  participant A as Agent
-  participant S as jev mcp
-  participant C as JevClient
-  participant T as TypeSafe API
-  participant L as EventLog
-
-  A->>S: tools/call typesafe_ask { state, questions, model?, sessionID? }
-  S->>S: Schema decode (QuestionMap)
-  S->>C: ask({ harness, state, questions, sessionID? })
-  C->>T: POST /v1/systemone
-  T-->>C: answers + usage
-  C->>L: call event (latency, answers, tokens)
-  C-->>S: AskResult
-  S-->>A: content: [{ type: "text", text: "answer_id: value (confidence N)…" }]
-```
-
-## typesafe_ask
-
-| Field | Type | Notes |
-|---|---|---|
-| `state` | string · object · array | The content to judge. Redact secrets, strip raw code — state leaves the machine |
-| `questions` | object | Map of question id → question, internal dialect (`_tag`) |
-| `model` | string? | TypeSafe model; default `jev-latest` |
-| `sessionID` | string? | Harness session id; pass the exact value the harness provides so the call is attributable and auditable. Never invent one |
-
-Question shapes:
-
-```jsonc
-{ "_tag": "choice", "instructions": "…", "criteria": { "opt": "description" } }
-{ "_tag": "noul",   "instructions": "…", "criteria": { "true": "…", "false": "…" } } // criteria optional
-{ "_tag": "score",  "instructions": "…", "criteria": ["level", "level", "…"] }
-```
-
-Answers:
-
-```jsonc
-choice → { "_tag": "choice", "choice": "opt", "confidence": 0.82, "probabilities": {…} }
-noul   → { "_tag": "noul", "noul": 0.31 }
-score  → { "_tag": "score", "score": 2, "confidence": 0.7, "probabilities": {…} }
-```
-
-Text results are one line per answer with plain verdict words, prefixed with
-the model and suffixed with token usage — enough for an agent to read
-directly, and echoed by `jev ask`. Noul lines read
-`id: p(yes)=0.73 — likely yes` (bands: very likely yes / likely yes /
-toss-up / likely no / very likely no). Score lines resolve the weighted index
-against the question's ordered levels when known
-(`id: 0.42 → between misleading and thin, leans misleading (confidence 0.58)`).
-Choice and score lines append `— LOW, treat as no signal` when confidence is
-below 0.4.
-
-**Encoded nested arguments.** Some MCP clients send a nested object or array as
-a JSON-encoded string — pi's direct tools did this for `questions` and lost the
-call to a decode error, after which the model answered from its own guess. The
-server therefore accepts either shape for `questions`, `claims`, `files`,
-`previousEvaluation`, and `skills`: the string is parsed, then validated exactly
-as before. A string that is not valid JSON still fails with the usual
-`invalid typesafe_ask arguments` text, and the advertised input schemas stay
-strict, so conforming clients are unaffected.
-
-## typesafe_verify
-
-Checks claims against evidence before they are published. Code extracts the
-numbers a claim asserts and reports which ones the evidence does not contain;
-Jev judges each remaining claim and returns one verdict line per claim:
-
-```jsonc
-{
-  "claims": [{ "id": "c0", "text": "all 12 tests pass" }],
-  "evidence": "test run: 12 passed, 0 failed",
-  "sessionID": "…" // optional
-}
-```
-
-```text
-c0: supported (confidence 0.94)
-```
-
-Verdicts are `supported`, `contradicted`, `unrelated`, or `insufficient`;
-`[numbers not in evidence: …]` marks deterministic gaps and `[needs evidence]`
-marks verdicts below the confidence floor (`VERDICT_CONFIDENCE_FLOOR = 0.6`) or
-claims whose numbers the evidence lacks. Claims and evidence are redacted before
-the call, evidence is capped at 40,000 characters, and one `triage` event with
-counts (`feature: "verify"`) is appended. The evidence text itself is never
-logged. At most 20 claims per call.
-
-## typesafe_review
-
-Reviews a change across eight independent quality dimensions: correctness,
-cognitive complexity, readability, modularity, coupling, changeability, test
-quality, and security.
-
-```jsonc
-{
-  "task": "add parser error recovery",
-  "diff": "…",
-  "files": [{ "path": "src/parser.ts", "content": "…" }], // optional, at most 8
-  "repositoryContext": "…", // optional
-  "previousEvaluation": { "dimensions": [ /* an earlier result */ ] }, // optional
-  "sessionID": "…" // optional
-}
-```
-
-At least one of `task`, `diff`, `files`, or `repositoryContext` is required.
-Each dimension gets an applicability gate (`noul`), a score over five
-dimension-specific descriptive levels, and — when `previousEvaluation` is
-supplied — a direct `improved`/`unchanged`/`regressed`/`incomparable` judgment.
-One review-level `choice` names the weakest dimension. There is no blended
-overall score.
-
-The result is JSON with raw scores (`0`–`4`), confidence, directions, the top
-weakness, and token usage. Dimension scores are normalized to `0`–`1` for the
-`review` event and the meter; the diff, files, and context are never logged.
-Review state is caller-supplied code: fields are credential-redacted and
-clipped, and state above 90,000 characters is rejected so the caller splits the
-review.
-
-## typesafe_skill_route
-
-Routes a task to one skill from a caller-supplied catalog. The caller owns the
-catalog: Jev cannot pick a candidate that was omitted, so pass every skill that
-could apply.
+## `typesafe_ask`
 
 ```json
 {
-  "task": "the export button spins forever; find out why and fix it",
-  "skills": [
-    { "name": "debugging", "description": "Systematic root-cause work for failures" },
-    { "name": "better-ui", "description": "UI polish: radius, spacing, hit areas" }
-  ]
+  "state": "The export must choose one backend.",
+  "questions": {
+    "decision": {
+      "_tag": "choice",
+      "instructions": "Which backend should we choose?",
+      "criteria": { "csv": "Simple tabular output", "xlsx": "Workbook formatting required" }
+    }
+  },
+  "sessionID": "optional-exact-harness-session-id"
 }
 ```
 
-Each skill name is an option and each description is its criterion; `none` is
-always offered. Three questions go out per call: the choice, a `noul` asking
-whether a second skill helps, and a `score` for how much the task depends on the
-skill. Code applies the floors (`SKILL_CONFIDENCE_FLOOR` 0.5,
-`SKILL_DEPENDENCE_FLOOR` 2), so a low-confidence or low-dependence pick returns
-`load: nothing` with the reason instead of a skill. When the second-skill gate
-fires, one more question set runs over the remaining candidates with the same
-floors, and the answer becomes `load: a, then b` — at most two skills per call.
-A declined follow-up prints `second: none (reason)`, and a failed follow-up
-keeps the first skill and prints `second: unavailable (...)`. Limits: 64
-candidates, 4,000 task characters; the task is redacted and clipped, and only
-the outcome and skill names are logged.
+`state` accepts JSON values. `questions` maps ids to one of:
 
-## Tool-surface policy
+```jsonc
+{ "_tag": "choice", "instructions": "…", "criteria": { "option": "description" } }
+{ "_tag": "noul", "instructions": "…", "criteria": { "true": "…", "false": "…" } }
+{ "_tag": "score", "instructions": "…", "criteria": ["low", "medium", "high"] }
+```
 
-`typesafe_ask` is the only tool an agent needs for an arbitrary judgment. New
-tools are allowed when they are thin, task-shaped wrappers around a documented
-question pack, and:
+`model` is optional and defaults to `jev-latest`. The answer includes the
+model, formatted answers, confidence where applicable, and token usage. Choice
+and score confidence below 0.4 is flagged as no signal; a Noul value is the
+probability of yes.
 
-- the coding agent itself calls the tool in-flight — an operator CLI workflow
-  or a harness hook is not a reason for a tool;
-- the tool owns state assembly and the code thresholds for its policy, so
-  callers do not hand-build state or re-implement routing;
-- every call goes through the same `JevClient`, the same redaction rules, and
-  the same event log as `typesafe_ask`;
-- the name and description are distinct enough that an agent cannot confuse
-  two tools; prefer extending an existing schema over near-duplicates.
+## `typesafe_rank`
 
-Every judgment still starts as a question pack (`src/question-packs/`); tools
-package packs, they do not replace them.
+```json
+{
+  "query": "Which excerpt best supports that the API retries after a timeout?",
+  "candidates": [
+    { "id": "retry-doc", "text": "Timeouts are retried up to three times." },
+    { "id": "cache-doc", "text": "Responses are cached for five minutes." }
+  ],
+  "sessionID": "optional-exact-harness-session-id"
+}
+```
 
-## Rationale and invariants
+Pass 1–20 candidates with unique ids; combined query and candidate text is
+limited to 40,000 characters. Jev scores each candidate and the server returns
+descending relevance probabilities, preserving input order for ties. Scores
+are per-candidate (not normalized across the list) and are not evidence of
+factual support. The tool returns JSON with `model`, `ranking` (`id` and
+`relevance`), a score-interpretation note, and token `usage`. This tool ranks
+only the supplied shortlist; it does not retrieve candidates. Common code,
+diff, and transcript patterns are rejected before sending; these conservative
+checks are not a complete content classifier. Credentials are redacted before
+query and candidate text is sent. The text result contains JSON like:
 
-- **One schema, not one tool.** Agents learn one question dialect; new
-  judgments become question packs, and a pack only becomes a tool under the
-  tool-surface policy above.
-- **Unknown tools are rejected**, never silently routed: `-32602`.
-- **No secrets in state.** `typesafe_ask` sends caller-provided state as-is;
-  `typesafe_verify` and `typesafe_review` redact credentials and clip their
-  fields, and the CLI/hooks clip and redact by default.
-- **Every call is logged** (harness, questions by id+type, answers, latency,
-  tokens) to the local event log before the result returns. Verify results add
-  a `triage` event with counts; review results add a `review` event with
-  normalized dimension scores. Logging failures never fail the call.
-- **Missing `TYPESAFE_API_KEY`** produces `isError: true` with a config
-  message — never an invented number.
+```json
+{
+  "model": "jev-latest",
+  "ranking": [{ "id": "retry-doc", "relevance": 0.91 }],
+  "note": "Per-candidate relevance probabilities, not normalized across the list...",
+  "usage": { "input": 120, "output": 4 }
+}
+```
 
-## Testing
+## `typesafe_verify`
 
-`handleMcpRequest` is a pure function over `McpDeps.tools`, so tests drive the
-full protocol without a network or an Effect runtime: initialize echo, tool
-listing, argument validation, unknown method/tool, and result formatting are
-covered in `tests/mcp/`. For end-to-end checks, point `JEV_ENDPOINT` at a
-local fake transport.
+```json
+{
+  "claims": [{ "id": "tests", "text": "All 12 tests pass" }],
+  "evidence": "test output: 12 passed, 0 failed",
+  "sessionID": "optional-exact-harness-session-id"
+}
+```
+
+Claims are judged as `supported`, `contradicted`, `unrelated`, or `insufficient`.
+The tool also reports claim numbers absent from the evidence and flags weak
+verdicts for follow-up. It accepts 1–20 claims and at most 40,000 evidence
+characters. Credentials are redacted before sending; claim and evidence text
+are never logged. Only numeric verdict summaries are appended to the local
+event log.
+
+## Logging and privacy
+
+Calls are logged locally with harness, session id, question ids and types,
+answer, usage, latency, and typed status. Raw ask state and question text are
+not logged. `typesafe_ask` sends caller-provided state as supplied, so callers
+must redact it. `typesafe_rank` rejects common code, diff, and transcript
+patterns, redacts credentials before sending, and logs no query, candidate
+text, or candidate ids. The pattern checks are not a complete content classifier.
+`typesafe_verify` redacts credentials and does not log its claims or evidence.
+`TYPESAFE_API_KEY` is read at call time and never logged.

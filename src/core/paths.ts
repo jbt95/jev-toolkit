@@ -1,37 +1,14 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
+const homeDir = Bun.env.HOME ?? Bun.env.USERPROFILE ?? ".";
 
-/** Shared data dir for the event log and loop state (override: JEV_DATA_DIR). */
+/** Shared data dir for the event log (override: JEV_DATA_DIR). */
 export function dataDir(): string {
-  return process.env.JEV_DATA_DIR ?? join(homedir(), ".local", "share", "jev");
+  return Bun.env.JEV_DATA_DIR ?? `${homeDir}/.local/share/jev`;
 }
 
 export function eventsPath(): string {
-  return join(dataDir(), "events.jsonl");
-}
-
-export function loopStatePath(): string {
-  return join(dataDir(), "loop-state.json");
+  return `${dataDir()}/events.jsonl`;
 }
 
 export function apiEndpoint(): string {
-  return process.env.JEV_ENDPOINT ?? "https://api.typesafe.ai/v1/systemone";
-}
-
-export function opencodeDbPath(): string {
-  return (
-    process.env.JEV_OPENCODE_DB ?? join(homedir(), ".local", "share", "opencode", "opencode.db")
-  );
-}
-
-export function claudeProjectsDir(): string {
-  return join(homedir(), ".claude", "projects");
-}
-
-export function piSessionsDir(): string {
-  return process.env.JEV_PI_SESSIONS_DIR ?? join(homedir(), ".pi", "agent", "sessions");
-}
-
-export function ompSessionsDir(): string {
-  return process.env.JEV_OMP_SESSIONS_DIR ?? join(homedir(), ".omp", "agent", "sessions");
+  return Bun.env.JEV_ENDPOINT ?? "https://api.typesafe.ai/v1/systemone";
 }

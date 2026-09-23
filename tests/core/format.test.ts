@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { formatAnswers, type AskResult } from "@/core/client.ts";
 
 const result = (answers: AskResult["answers"]): AskResult => ({

@@ -18,9 +18,9 @@ export interface EvidenceClaim {
 }
 
 export interface EvidenceInput {
-  /** Claims the caller is about to publish, already redacted and clipped. */
+  /** Claims the caller is about to publish, already redacted. */
   readonly claims: ReadonlyArray<EvidenceClaim>;
-  /** Evidence text the claims are checked against, already redacted and clipped. */
+  /** Evidence text the claims are checked against, already redacted. */
   readonly evidence: string;
 }
 

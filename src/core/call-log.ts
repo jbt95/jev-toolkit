@@ -1,6 +1,5 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { randomUUID } from "node:crypto";
 import type { EventLogService } from "./events.ts";
 import type {
   AnswerMap,
@@ -49,7 +48,7 @@ export const callIdentityFor = (input: CallIdentityInput): CallIdentity => ({
   harness: input.harness,
   sessionID: input.sessionID,
   questions: input.questions,
-  callID: input.callID ?? randomUUID(),
+  callID: input.callID ?? crypto.randomUUID(),
   purpose: input.purpose ?? "ask",
   stateSizeBucket: input.stateSizeBucket,
 });

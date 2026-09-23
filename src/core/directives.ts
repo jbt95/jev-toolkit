@@ -1,21 +1,9 @@
-/** Shared trigger text for every harness integration. */
-
-export const PROMPT_DIRECTIVE =
-  "[Jev policy] This asks for a quantitative judgment. Call the typesafe_ask tool before writing " +
-  "that judgment. If choosing which skill(s) to load from a candidate catalog, call " +
-  "typesafe_skill_route with the candidates instead, then load only the returned skills.";
-
-export const CONTEXT_POLICY =
-  "Jev test policy: route probabilities, rankings, choices among alternatives, and graded estimates through " +
-  "typesafe_ask; route skill selection through typesafe_skill_route; log-first, never invent the number.";
-
-/** Session-level MCP guidance: explicit enough for tool discovery, short enough to retain. */
-export const MCP_INSTRUCTIONS =
-  "Jev tool policy: call a Jev tool before publishing a probability, likelihood, ranking, comparison, " +
-  "choice among alternatives, implementation recommendation, or graded estimate. Use typesafe_skill_route " +
-  "(not typesafe_ask) when choosing skills from a candidate catalog; use typesafe_verify for claims against " +
-  "evidence and typesafe_review for structured change review. For other judgments, typesafe_ask requires both " +
-  'state and questions: {"state":"focused context","questions":{"decision":{"_tag":"choice","instructions":"Pick one.","criteria":{"a":"...","b":"..."}}}}. ' +
-  "Do not send query-only payloads or omit questions. Report the result and confidence as from Jev; if a call " +
-  "fails, say the judgment is unavailable and never invent a number. Exact arithmetic, lookups, and trivia " +
-  "without a decision do not need a call. Keep secrets and raw proprietary code out of state.";
+/** Session-level guidance advertised by the MCP server. */
+export const MCP_INSTRUCTIONS = [
+  "Jev tool routing: when a task matches a case below, call that tool before answering; do not substitute one tool for another.",
+  "- Use typesafe_ask for a probability, likelihood, comparison, recommendation, or choice that is not an evidence check or ranking of supplied candidates. Include focused state and explicit questions.",
+  "- Use typesafe_rank to order or prioritize an explicit candidate set against a query. Pass the supplied candidates; it does not search for them. Use its returned order and scores as-is. Scores are per-candidate, not normalized across the list; the top candidate may still be a weak match.",
+  "- Use typesafe_verify to check specific claims against supplied evidence, especially before presenting evidence-based conclusions. Pass the exact claims and relevant evidence; a relevance rank is not proof. If evidence is missing, ask for it rather than inventing it.",
+  "For deterministic arithmetic or lookups, do not call an unrelated tool. If Jev fails, signals low confidence, or returns only weak relevance scores, report that limitation rather than inventing an answer.",
+  "Keep inputs focused. Credentials are redacted for rank and verify; redact secrets from ask state yourself, and do not send raw proprietary code.",
+].join("\n");

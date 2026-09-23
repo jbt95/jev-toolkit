@@ -1,3 +1,0 @@
-{"type":"user","timestamp":"2026-09-16T00:00:00.000Z","message":{"role":"user","content":"analyze the risks"}}
-{"type":"assistant","timestamp":"2026-09-16T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The risk is roughly 30% and the build should pass."},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
-{"type":"assistant","timestamp":"2026-09-15T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"This is likely old news."}]}}

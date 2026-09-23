@@ -1,4 +1,0 @@
-index-D8QHUBOm.js:31 GET https://ilc-bff.deve.canda.com/api-web/v1/masterData/partnerLocationAssignment net::ERR_NAME_NOT_RESOLVED
-await in d
-GET @ index-D8QHUBOm.js:2
-502 Bad Gateway from the deve ALB (target group unhealthy after the latest deploy)

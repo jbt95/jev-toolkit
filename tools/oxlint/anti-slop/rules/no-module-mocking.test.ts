@@ -12,6 +12,7 @@ tester.run("anti-slop/no-module-mocking", noModuleMockingRule, {
     "const vi = { mock() {} }; vi.mock();",
     "function test(jest: { mock(): void }) { jest.mock(); }",
     "import { vi as localVi } from './helpers'; localVi.mock('./module');",
+    "import { mock as localMock } from './helpers'; localMock.module('./module', {});",
   ],
   invalid: [
     { code: "vi.mock('./user-store');", errors: [error] },
@@ -20,6 +21,8 @@ tester.run("anti-slop/no-module-mocking", noModuleMockingRule, {
     { code: "jest.unstable_mockModule('./user-store');", errors: [error] },
     { code: "import { vi } from 'vitest'; vi.mock('./user-store');", errors: [error] },
     { code: "import { vi as testApi } from 'vitest'; testApi.mock('./user-store');", errors: [error] },
+    { code: "import { vi } from 'bun:test'; vi.mock('./user-store');", errors: [error] },
+    { code: "import { mock } from 'bun:test'; mock.module('./user-store', {});", errors: [error] },
     {
       code: "import { jest } from '@jest/globals'; jest.mock('./user-store');",
       errors: [error],

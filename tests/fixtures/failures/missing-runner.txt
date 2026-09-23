@@ -1,4 +1,0 @@
-Stop hook feedback:
-secret-scan hook failed (exit 2): SECRET_SCAN_RUNNER is not set in this environment.
-The configured runner ~/.claude/plugins/cache/secret-scan/secret-scan/secret-scan.sh does not exist.
-Every turn will keep failing until this hook is disabled or the runner path is fixed.

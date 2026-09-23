@@ -1,7 +1,6 @@
 #!/bin/sh
-# jev CLI shim. Resolves its own symlink (installed as ~/.local/bin/jev) so the
-# real repo path is found, then runs the TypeScript entrypoint with Node's
-# native type stripping.
+# jev MCP launcher. Resolves its own symlink (installed as ~/.local/bin/jev) so the
+# real repo path is found, then runs the TypeScript entrypoint with Bun.
 target=$0
 while [ -L "$target" ]; do
   dir=$(cd "$(dirname "$target")" && pwd)
@@ -12,4 +11,4 @@ while [ -L "$target" ]; do
   esac
 done
 dir=$(cd "$(dirname "$target")" && pwd)
-exec node "$dir/../src/cli/jev.ts" "$@"
+exec bun "$dir/../src/cli/jev.ts" "$@"

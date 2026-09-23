@@ -1,8 +1,0 @@
----- native_hook_wrappers_delegate_worktree_mode stdout ----
-
-thread 'native_hook_wrappers_delegate_worktree_mode' (11366) panicked at tests/secret_gate.rs:386:14:
-called `Result::unwrap()` on an `Err` value: Os { code: 26, kind: ExecutableFileBusy, message: "Text file busy" }
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-
-failures:
-    native_hook_wrappers_delegate_worktree_mode

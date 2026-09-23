@@ -6,20 +6,21 @@
   **`@typesafe-ai/sdk` 0.6.0** (pinned exactly;
   production Jev transport via `TypeSafeClient.systemOne`). Everything else is
   a devDependency:
-  `typescript` 5.9.2, `@types/node` 22.18.0, `vitest` 3.2.4, `oxlint` 1.81.0,
+  `typescript` 7.0.2, `@types/bun` 1.3.14, `oxlint` 1.81.0,
   `@oxlint/plugins` 1.81.0, `oxfmt` 0.66.0.
 - TypeScript strict, ESM, explicit `.ts` extensions
   (`allowImportingTsExtensions`), `verbatimModuleSyntax`, `isolatedModules`.
-  No build step. Node >= 26.
-- Import paths: the `@/…` alias exists for tests and repo-internal tooling
-  only; the CLI runs on plain Node, which ignores tsconfig paths.
+  No build step. Bun >= 1.3.14 for runtime and application tests; the external
+  Oxlint `RuleTester` fixture suite alone uses Node >= 22.18.
+- Import paths: the `@/…` alias is available to tests and repo-internal tooling
+  via Bun's `tsconfig.json` path support.
 
 ## Effect rules
 
 - Core code returns `Effect.Effect`, not `Promise`/`async`. Wrap unavoidable
-  platform APIs (`fetch`, `node:fs`, `node:http`, `node:sqlite`,
-  `node:child_process`) with `Effect.tryPromise`/`Effect.try` and convert
-  failures to typed errors at that boundary. `Effect.runPromise` only at host
+  platform APIs (`fetch`, Bun filesystem APIs, `Bun.spawn`) with
+  `Effect.tryPromise`/`Effect.try` and convert failures to typed errors at
+  that boundary. `Effect.runPromise` only at host
   entrypoints (CLI `main`, hook boundaries) and tests.
 - Services: class-style `Context.Service` with exported `make*` constructors
   and Layer factories. Runtime code yields services from context; **only tests
@@ -49,9 +50,10 @@
 
 ## Tooling gates
 
-- All four green before every commit: `npm run lint` (oxlint + vendored
-  anti-slop generic and Effect rule groups), `npm run format:check` (oxfmt),
-  `npm run typecheck` (tsc), `npm test` (vitest).
+- All four green before every commit: `bun run lint` (oxlint + vendored
+  anti-slop generic and Effect rule groups), `bun run format:check` (oxfmt),
+  `bun run typecheck` (tsc), `bun run test` (Bun application tests plus the
+  Node-only Oxlint `RuleTester` fixtures).
 - Tests are offline: fake services/transports, temp dirs, `127.0.0.1` only.
   Never call `api.typesafe.ai` in tests. No module mocking (`vi.mock` banned)
   — inject services and functions instead.
